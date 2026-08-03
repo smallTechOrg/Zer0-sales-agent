@@ -62,12 +62,19 @@ jobs:
             --project=${{ secrets.GCP_PROJECT }} \
             --metadata=BRANCH_NAME=staging
       - name: Deploy to staging VM
+        env:
+          GROQ_API_KEY: ${{ vars.GROQ_API_KEY }}
+          DATABASE_URL: ${{ vars.DATABASE_URL }}
+          GROQ_MODEL_NAME: ${{ vars.GROQ_MODEL_NAME }}
         run: |
+          GROQ_API_KEY_B64=$(printf '%s' "$GROQ_API_KEY" | base64 -w0)
+          DATABASE_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
+          GROQ_MODEL_NAME_B64=$(printf '%s' "$GROQ_MODEL_NAME" | base64 -w0)
           gcloud compute ssh ${{ secrets.GCP_VM_INSTANCE_NAME_STAGING }} \
             --zone=${{ secrets.GCP_ZONE_STAGING }} \
             --project=${{ secrets.GCP_PROJECT }} \
             --ssh-flag="-o StrictHostKeyChecking=no" \
-            --command="sudo bash /opt/ai-agent-boilerplate/scripts/update_app.sh"
+            --command="sudo env GROQ_API_KEY_B64=$GROQ_API_KEY_B64 DATABASE_URL_B64=$DATABASE_URL_B64 GROQ_MODEL_NAME_B64=$GROQ_MODEL_NAME_B64 bash /opt/ai-agent-boilerplate/scripts/update_app.sh"
       - name: Show deploy logs
         if: always()
         run: |
@@ -103,12 +110,19 @@ jobs:
             --project=${{ secrets.GCP_PROJECT }} \
             --metadata=BRANCH_NAME=main
       - name: Deploy to production VM
+        env:
+          GROQ_API_KEY: ${{ vars.GROQ_API_KEY }}
+          DATABASE_URL: ${{ vars.DATABASE_URL }}
+          GROQ_MODEL_NAME: ${{ vars.GROQ_MODEL_NAME }}
         run: |
+          GROQ_API_KEY_B64=$(printf '%s' "$GROQ_API_KEY" | base64 -w0)
+          DATABASE_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
+          GROQ_MODEL_NAME_B64=$(printf '%s' "$GROQ_MODEL_NAME" | base64 -w0)
           gcloud compute ssh ${{ secrets.GCP_VM_INSTANCE_NAME_PROD }} \
             --zone=${{ secrets.GCP_ZONE_PROD }} \
             --project=${{ secrets.GCP_PROJECT }} \
             --ssh-flag="-o StrictHostKeyChecking=no" \
-            --command="sudo bash /opt/ai-agent-boilerplate/scripts/update_app.sh"
+            --command="sudo env GROQ_API_KEY_B64=$GROQ_API_KEY_B64 DATABASE_URL_B64=$DATABASE_URL_B64 GROQ_MODEL_NAME_B64=$GROQ_MODEL_NAME_B64 bash /opt/ai-agent-boilerplate/scripts/update_app.sh"
       - name: Show deploy logs
         if: always()
         run: |
