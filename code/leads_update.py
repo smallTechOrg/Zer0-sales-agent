@@ -11,7 +11,7 @@ def update_contact_info(session_id: str, name: str = None, email: str = None, mo
             update_query = """
                 UPDATE chat_info
                 SET
-                    name    = COALESCE(%s, name),
+                    contact_name = COALESCE(%s, contact_name),
                     email   = COALESCE(%s, email),
                     mobile  = COALESCE(%s, mobile),
                     country = COALESCE(%s, country)
