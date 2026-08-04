@@ -17,14 +17,14 @@ Guide for deploying, monitoring, and debugging the AI Agent Boilerplate applicat
 1. Push to configured branch triggers GitHub Actions
 2. GitHub Actions authenticates with GCP service account, SSHs to VM, executes scripts
 3. `update_app.sh`: Cleans logs, fetches branch from GCP metadata, pulls latest code (hard reset), runs `deploy.sh`
-4. `deploy.sh`: Activates venv at `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate`, cleans `.env`/`flask.log`, installs dependencies, generates `.env` via `get_env.py`, kills old Flask processes, starts Flask on `0.0.0.0:5000` (background)
+4. `deploy.sh`: Activates venv at `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate`, cleans `.env`/`flask.log`, installs dependencies, decodes the `GROQ_API_KEY`/`DATABASE_URL`/`GROQ_MODEL_NAME` values injected by the workflow over SSH into `.env`, kills old Flask processes, starts Flask on `0.0.0.0:5000` (background)
 
 **Key Paths**:
 - Scripts: `/scripts/deploy.sh`, `/scripts/update_app.sh`
 - App: `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/`
 - Logs: `/var/log/update_app.log`, `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log`
 
-**Environment**: Secrets stored in GitHub (service account key, VM IP, project ID, DB credentials, API keys)
+**Environment**: `GROQ_API_KEY`/`DATABASE_URL` live in GitHub **environment variables** (separate values for staging/production, plaintext/unmasked by design — see `CI_CD.md`); `GROQ_MODEL_NAME` is a shared repo-level GitHub variable. All other deploy config — including the GCP service account key, VM name/zone, and project ID — also lives in GitHub Actions **variables** (not secrets), same plaintext/unmasked tradeoff.
 
 
 ## Monitoring Deployments
@@ -62,7 +62,7 @@ gcloud compute ssh ai-agent-staging --zone=us-central1-c
 
 **1. Deployment Fails (GitHub Actions)**
 - Check Actions tab → failed workflow → expand step
-- Causes: Auth failure (verify service account key in secrets), SSH timeout (check VM/firewall), permissions (verify roles)
+- Causes: Auth failure (verify service account key in Variables), SSH timeout (check VM/firewall), permissions (verify roles)
 
 **2. Application Not Starting**
 ```bash

@@ -1,54 +1,141 @@
-name: Deploy Python App to GCP E2 (Staging)
+name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
-      - staging   # change if you want a different branch for staging
+      - staging
 
 jobs:
-  deploy-staging:
-    if: github.ref != 'refs/heads/main'
+  test:
     runs-on: ubuntu-latest
-    environment: deploy-staging   # matches the environment you created in GitHub
-
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_chatdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
-      - uses: 'actions/checkout@v4' # Checkout your repository
-      - uses: 'google-github-actions/auth@v2' # Authenticate to Google Cloud
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          project_id: ${{ secrets.GCP_PROJECT }} 
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Update startup script and restart staging VM
+          python-version: "3.12"
+      - name: Install dependencies
         run: |
-          gcloud compute instances add-metadata ${{secrets.GCP_VM_INSTANCE_NAME_STAGING}} \
-            --zone=${{secrets.GCP_ZONE_STAGING}} \
-            --project=${{secrets.GCP_PROJECT}} \
-            --metadata-from-file=startup-script=./scripts/update_app.sh \
-            --metadata=BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          cd code
+          pip install -r requirements.txt
+      - name: Lint
+        run: |
+          cd code
+          ruff check .
+      - name: Run tests
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/"
+          GROQ_API_KEY: "test-key"
+        run: |
+          cd code
+          pytest test/ -v
 
-          gcloud compute instances stop ${{secrets.GCP_VM_INSTANCE_NAME_STAGING }} --zone=${{secrets.GCP_ZONE_STAGING}} --project=${{secrets.GCP_PROJECT}}
-          gcloud compute instances start ${{secrets.GCP_VM_INSTANCE_NAME_STAGING }} --zone=${{secrets.GCP_ZONE_STAGING}} --project=${{secrets.GCP_PROJECT}}
+  deploy-staging:
+    needs: test
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ vars.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Set branch metadata
+        run: |
+          gcloud compute instances add-metadata ${{ vars.GCP_VM_INSTANCE_NAME_STAGING }} \
+            --zone=${{ vars.GCP_ZONE_STAGING }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --metadata=BRANCH_NAME=staging
+      - name: Deploy to staging VM
+        env:
+          GROQ_API_KEY: ${{ vars.GROQ_API_KEY }}
+          DATABASE_URL: ${{ vars.DATABASE_URL }}
+          GROQ_MODEL_NAME: ${{ vars.GROQ_MODEL_NAME }}
+        run: |
+          GROQ_API_KEY_B64=$(printf '%s' "$GROQ_API_KEY" | base64 -w0)
+          DATABASE_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
+          GROQ_MODEL_NAME_B64=$(printf '%s' "$GROQ_MODEL_NAME" | base64 -w0)
+          gcloud compute ssh ${{ vars.GCP_VM_INSTANCE_NAME_STAGING }} \
+            --zone=${{ vars.GCP_ZONE_STAGING }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="sudo env GROQ_API_KEY_B64=$GROQ_API_KEY_B64 DATABASE_URL_B64=$DATABASE_URL_B64 GROQ_MODEL_NAME_B64=$GROQ_MODEL_NAME_B64 bash /opt/ai-agent-boilerplate/scripts/update_app.sh"
+      - name: Show deploy logs
+        if: always()
+        run: |
+          gcloud compute ssh ${{ vars.GCP_VM_INSTANCE_NAME_STAGING }} \
+            --zone=${{ vars.GCP_ZONE_STAGING }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="sudo cat /var/log/update_app.log || echo 'No log file found'"
+      - name: Health check
+        run: |
+          sleep 10
+          gcloud compute ssh ${{ vars.GCP_VM_INSTANCE_NAME_STAGING }} \
+            --zone=${{ vars.GCP_ZONE_STAGING }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="curl -sf http://localhost:5000/health || exit 1"
 
   deploy-production:
+    needs: test
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: deploy-staging  # matches the environment you created in GitHub
-
+    environment: production
     steps:
-      - uses: 'actions/checkout@v4' # Checkout your repository
-      - uses: 'google-github-actions/auth@v2' # Authenticate to Google Cloud
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT }} # Replace with your actual GCP project ID
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Update startup script and restart production VM
+          credentials_json: ${{ vars.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Set branch metadata
         run: |
-          gcloud compute instances add-metadata ${{secrets.GCP_VM_INSTANCE_NAME_PROD}} \
-            --zone=${{secrets.GCP_ZONE}} \
-            --project=${{secrets.GCP_PROJECT}} \
-            --metadata-from-file=startup-script=./scripts/update_app.sh \
-            --metadata=BRANCH_NAME=${GITHUB_REF#refs/heads/}
-
-          gcloud compute instances stop ${{secrets.GCP_VM_INSTANCE_NAME_PROD}} --zone=${{secrets.GCP_ZONE}} --project=${{secrets.GCP_PROJECT}}
-          gcloud compute instances start ${{secrets.GCP_VM_INSTANCE_NAME_PROD}} --zone=${{secrets.GCP_ZONE}} --project=${{secrets.GCP_PROJECT}}
+          gcloud compute instances add-metadata ${{ vars.GCP_VM_INSTANCE_NAME_PROD }} \
+            --zone=${{ vars.GCP_ZONE_PROD }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --metadata=BRANCH_NAME=main
+      - name: Deploy to production VM
+        env:
+          GROQ_API_KEY: ${{ vars.GROQ_API_KEY }}
+          DATABASE_URL: ${{ vars.DATABASE_URL }}
+          GROQ_MODEL_NAME: ${{ vars.GROQ_MODEL_NAME }}
+        run: |
+          GROQ_API_KEY_B64=$(printf '%s' "$GROQ_API_KEY" | base64 -w0)
+          DATABASE_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
+          GROQ_MODEL_NAME_B64=$(printf '%s' "$GROQ_MODEL_NAME" | base64 -w0)
+          gcloud compute ssh ${{ vars.GCP_VM_INSTANCE_NAME_PROD }} \
+            --zone=${{ vars.GCP_ZONE_PROD }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="sudo env GROQ_API_KEY_B64=$GROQ_API_KEY_B64 DATABASE_URL_B64=$DATABASE_URL_B64 GROQ_MODEL_NAME_B64=$GROQ_MODEL_NAME_B64 bash /opt/ai-agent-boilerplate/scripts/update_app.sh"
+      - name: Show deploy logs
+        if: always()
+        run: |
+          gcloud compute ssh ${{ vars.GCP_VM_INSTANCE_NAME_PROD }} \
+            --zone=${{ vars.GCP_ZONE_PROD }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="sudo cat /var/log/update_app.log || echo 'No log file found'"
+      - name: Health check
+        run: |
+          sleep 10
+          gcloud compute ssh ${{ vars.GCP_VM_INSTANCE_NAME_PROD }} \
+            --zone=${{ vars.GCP_ZONE_PROD }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="curl -sf http://localhost:5000/health || exit 1"
