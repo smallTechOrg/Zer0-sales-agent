@@ -39,32 +39,25 @@ Triggers only on pushes to `main`. Requires the `test` job to pass.
 
 Same as staging but targets `ai-agent-prod` VM and sets `BRANCH_NAME=main` (selects `prod_chat_db`).
 
-## GitHub Secrets Required
+## GitHub Variables Required
 
-Configure these in **repo Settings → Secrets and variables → Actions → Secrets**:
+By decision, **all** pipeline config — including the GCP service account key — is stored as **GitHub Variables**, not Secrets. Configure these in **repo Settings → Secrets and variables → Actions → Variables**:
 
-| Secret | Scope | Value |
-|--------|-------------|-------|
+| Variable | Scope | Value |
+|----------|-------------|-------|
 | `GCP_SA_KEY` | repo-level | Service account JSON key with `compute.instanceAdmin.v1` role |
 | `GCP_PROJECT` | repo-level | `ai-agent-boilerplate0` |
 | `GCP_VM_INSTANCE_NAME_STAGING` | staging environment | `staging-instance` |
 | `GCP_ZONE_STAGING` | staging environment | `us-central1-f` |
 | `GCP_VM_INSTANCE_NAME_PROD` | production environment | `ai-agent-prod` |
 | `GCP_ZONE_PROD` | production environment | VM zone for production |
-
-## GitHub Variables Required
-
-By decision, `GROQ_API_KEY` / `DATABASE_URL` / `GROQ_MODEL_NAME` are stored as **GitHub Variables**, not Secrets — configure them in **repo Settings → Secrets and variables → Actions → Variables**:
-
-| Variable | Scope | Value |
-|----------|-------|-------|
 | `GROQ_MODEL_NAME` | repo-level (shared) | e.g. `meta-llama/llama-4-scout-17b-16e-instruct` — same for both environments unless overridden |
 | `GROQ_API_KEY` | staging **and** production environments, set separately | Groq API key |
 | `DATABASE_URL` | staging **and** production environments, set separately | Base Postgres URL, e.g. `postgresql://user:pass@host:5432/` — `config.py` appends the branch-specific DB name at runtime |
 
-GitHub Actions resolves `vars.NAME` using **environment variables first, repo-level variables as fallback** — so a repo-level `GROQ_MODEL_NAME` is picked up by both jobs automatically, but if you ever add an environment-level `GROQ_MODEL_NAME` under `staging` or `production`, that overrides the shared value for just that job. Use this to keep `GROQ_MODEL_NAME` shared while keeping `GROQ_API_KEY` / `DATABASE_URL` distinct per environment.
+GitHub Actions resolves `vars.NAME` using **environment variables first, repo-level variables as fallback** — so a repo-level `GROQ_MODEL_NAME` is picked up by both jobs automatically, but if you ever add an environment-level `GROQ_MODEL_NAME` under `staging` or `production`, that overrides the shared value for just that job. Use this to keep `GROQ_MODEL_NAME` shared while keeping per-environment values (`GROQ_API_KEY`, `DATABASE_URL`, VM name/zone) distinct per environment.
 
-**Important — these are Variables, not Secrets**: GitHub does **not** encrypt them and does **not** mask them in Actions run logs. `GROQ_API_KEY` and `DATABASE_URL` (which embeds the DB password) will appear in plaintext in the "Deploy to `<env>` VM" step log, and anyone with read access to the repo can view them under Settings. This was an explicit, acknowledged choice — flagging the concrete consequence here so it's not a surprise later.
+**Important — these are Variables, not Secrets**: GitHub does **not** encrypt them and does **not** mask them in Actions run logs. `GROQ_API_KEY`, `DATABASE_URL` (which embeds the DB password), and now **`GCP_SA_KEY` (the GCP service account private key)** will appear in plaintext wherever they're referenced/echoed, and anyone with read access to the repo can view them under Settings. Unlike the app config, `GCP_SA_KEY` is a live cloud credential — treat this as a real widening of blast radius, not just a logging inconvenience. This was an explicit, acknowledged choice — flagging the concrete consequence here so it's not a surprise later.
 
 ## GitHub Environments
 
