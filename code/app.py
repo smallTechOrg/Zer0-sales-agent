@@ -1,3 +1,5 @@
+import logging
+
 from flask import Flask, render_template
 from flask_cors import CORS
 from flask_smorest import Api
@@ -5,13 +7,26 @@ from flask_smorest import Api
 from api import register_blueprints
 from api.domains import domains_bp
 from config import DEBUG
+from db import init_db
 
 # ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
 
 def create_app() -> Flask:
+    logging.basicConfig(
+        level=logging.DEBUG if DEBUG else logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
     flask_app = Flask(__name__)
+
+    # -- Database ------------------------------------------------------------
+    # init_db never raises: if PostgreSQL is down the app still starts, /health
+    # reports it, and a background thread creates the schema once the database
+    # comes back. Previously an unreachable database at import time killed the
+    # process, so even the health check was unreachable.
+    init_db()
 
     # -- flask-smorest / OpenAPI configuration ---------------------------------
     # Auto-generated spec is served at /api/openapi.json.

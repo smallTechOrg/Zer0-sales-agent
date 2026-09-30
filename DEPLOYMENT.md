@@ -33,8 +33,16 @@ Guide for deploying, monitoring, and debugging the AI Agent Boilerplate applicat
 
 **Health Check**:
 ```bash
-curl http://<VM_EXTERNAL_IP>:5000/health  # Expected: {"message": "Hello World"}
+curl http://<VM_EXTERNAL_IP>:5000/health
+# 200 when the database is reachable, 503 when it is not:
+# {"message":"Hello World","database":"connected","schema":"ready",
+#  "pool":{"min_size":1,"max_size":2,"size":2,"available":2,"waiting":0,"connections_lost":0}}
 ```
+
+The probe runs through the same connection pool the chat and prompt endpoints
+use, so a green health check means those endpoints can reach the database too.
+`database: disconnected` with the app still answering is the expected state
+during a database outage - the app stays up and reconnects by itself.
 
 **On VM**:
 ```bash
@@ -85,7 +93,7 @@ cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code
 source ../venv/bin/activate
 python3 -c "import app"  # Test import
 cat .env                  # Verify variables
-python3 -c "from db import get_connection; get_connection()"  # Test DB
+python3 -c "from db import ping; ping(); print('DB OK')"  # Test DB via the pool
 ```
 
 **4. Missing Dependencies**
@@ -98,13 +106,81 @@ cd code && pip install -r requirements.txt
 ```
 
 **5. Database Connection Errors**
+
+The app does not need a restart after a PostgreSQL restart. All database access
+goes through a connection pool that validates connections before use and
+retries on failure, so the API recovers on its own within a few seconds. If it
+does not, the database is still unreachable - check the server, not the app.
+
+**The app also starts when the database is down.** Startup waits
+`DB_STARTUP_WAIT` seconds for the schema, then serves regardless, so `/health`
+answers 503 within seconds rather than the process hanging. A background thread
+keeps retrying and creates the schema as soon as the database appears - watch
+for `Database schema ready` in `flask.log`. Until then `/health` reports
+`"schema":"pending"`.
+
+Measured behaviour during a full outage:
+
+| | Database down | After it returns |
+|---|---|---|
+| `/health` | 503 in ~5s, `"database":"disconnected"` | green ~10s later |
+| Other endpoints | 500 in ~16s (the retry budget) | normal, single-digit ms |
+| The process | stays up and answering | no restart needed |
+
 ```bash
 sudo systemctl status postgresql
 sudo systemctl start postgresql
 psql -U <username> -d <database_name>
 sudo tail -f /var/log/postgresql/postgresql-*.log
 cat /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/.env | grep DB
+
+# What the app itself thinks:
+curl -s http://localhost:5000/health | python3 -m json.tool
+grep -E "Database unreachable|lost connection|reconnect"   /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
 ```
+
+**Connection pool settings** (optional, set in `.env`; defaults are in
+`code/db_pool.py`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DB_POOL_MIN_SIZE` | 1 | Connections kept open |
+| `DB_POOL_MAX_SIZE` | 2 | Ceiling on concurrent connections |
+| `DB_POOL_TIMEOUT` | 5 | Seconds one attempt waits for a working connection |
+| `DB_RETRY_ATTEMPTS` | 3 | Attempts before a request gives up |
+| `DB_RECONNECT_TIMEOUT` | 10 | Caps the pool's background reconnect backoff |
+| `DB_POOL_MAX_IDLE` | 300 | Recycle connections idle this long |
+| `DB_POOL_MAX_LIFETIME` | 3600 | Recycle connections older than this |
+| `DB_HEALTH_TIMEOUT` | 5 | Budget for the `/health` probe |
+| `DB_STARTUP_WAIT` | 5 | Seconds startup waits for the schema before serving anyway |
+| `DB_STATEMENT_TIMEOUT_MS` | 10000 | Ceiling on one query, so an overloaded DB cannot park a request |
+| `DB_IDLE_TX_TIMEOUT_MS` | 30000 | Backstop against a transaction pinning a connection |
+| `DB_TCP_USER_TIMEOUT_MS` | 20000 | Detects a server that went silent (Linux only) |
+
+Worst case a request waits during a full outage is roughly
+`DB_RETRY_ATTEMPTS x DB_POOL_TIMEOUT` plus backoff (about 16s by default).
+
+`DB_POOL_MAX_SIZE` is 2 on purpose: the database is a shared cloud instance, so
+the app stays a light tenant rather than sizing for its own peak. Two is enough
+because no request holds a connection across the LLM call - every borrow is one
+query lasting milliseconds. Measured on this app, 50 simultaneous visitors
+(350 requests) complete in about 1s against 2 connections, and extra callers
+queue rather than fail.
+
+**If the database is reachable but not answering** (an overloaded shared
+instance: connections succeed, queries do not return), `DB_STATEMENT_TIMEOUT_MS`
+caps each query at 10s and the request fails rather than parking forever. A
+statement that hits that ceiling is deliberately **not** retried - re-running a
+query against a database that is already struggling is how a slow database
+becomes a down one. Look for `canceling statement due to statement timeout` in
+`flask.log`; it means the database needs attention, not the app.
+
+**Before raising or lowering it**, note the constraint that makes 2 safe: no
+request may hold two connections at once. Two such requests would take one
+connection each and then wait on each other. `test_db_pool.py` enforces this,
+and `db_pool` logs a warning with a stack trace if it ever happens at runtime.
+Lowering to 1 is not advised - a queued request would then sit behind any slow
+query with nothing else to run on.
 
 **6. Port Already in Use**
 ```bash

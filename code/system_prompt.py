@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from functools import lru_cache
-from db import sync_connection
+from db_pool import with_connection
 from config import DEFAULT_DOMAIN, agent_type
 
 FORMATTING_INSTRUCTION = """
@@ -62,8 +62,9 @@ def load_prompt_from_db(domain: str, agent_type: str, prompt_type: str):
     except Exception as e:
         raise RuntimeError(f"Failed to load prompt from DB: {e}")
 
-def find_parent_key(key):
-    with sync_connection.cursor() as cur:
+@with_connection
+def find_parent_key(conn, key):
+    with conn.cursor() as cur:
         cur.execute("""
             SELECT parent.key
             FROM domains child
@@ -73,18 +74,16 @@ def find_parent_key(key):
         row = cur.fetchone()
         return row[0] if row else None
 
-def find_prompt(domain, agent_type, prompt_type):
-    try:
-        with sync_connection.cursor() as cur:
-            cur.execute("""
-                SELECT text 
-                FROM prompts
-                WHERE domain = %s AND agent_type = %s AND type = %s
-                LIMIT 1;
-            """, (domain, agent_type, prompt_type))
+@with_connection
+def find_prompt(conn, domain, agent_type, prompt_type):
+    # Errors propagate so @with_connection can retry a lost connection;
+    # load_prompt_from_db wraps whatever survives the retries.
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT text
+            FROM prompts
+            WHERE domain = %s AND agent_type = %s AND type = %s
+            LIMIT 1;
+        """, (domain, agent_type, prompt_type))
 
-            row = cur.fetchone()
-            return row
-        
-    except Exception as e:
-        raise RuntimeError(f"Failed to load prompt from DB: {e}")
+        return cur.fetchone()

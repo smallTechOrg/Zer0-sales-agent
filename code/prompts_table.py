@@ -1,8 +1,8 @@
-import psycopg
 import json
 from pathlib import Path
 from functools import lru_cache
 from config import agent_type, DEFAULT_DOMAIN
+from db_pool import with_connection
 
 
 def load_json(path: Path):
@@ -26,50 +26,47 @@ def load_json(path: Path):
 def check_and_insert_default_prompts(sync_connection):
     """
     Check if the prompts table is empty, and insert default rows only if empty.
+
+    Runs as part of the schema bootstrap on a caller-supplied connection, so it
+    neither commits nor rolls back: the bootstrap owns the transaction.
     """
-    try:
-        with sync_connection.cursor() as cur:
-            # Check if the table is empty
-            cur.execute("SELECT COUNT(*) FROM prompts;")
-            count = cur.fetchone()[0]
-            if count == 0:
-                print("Prompts table is empty. Inserting default prompts...")
+    with sync_connection.cursor() as cur:
+        # Check if the table is empty
+        cur.execute("SELECT COUNT(*) FROM prompts;")
+        count = cur.fetchone()[0]
+        if count != 0:
+            print("Prompts table already contains data. No insertion needed.")
+            return
 
-                default_prompts = [
-                    (DEFAULT_DOMAIN, 'generic', 'fetch-name', Path("prompts/name_prompt.txt")),
-                    (DEFAULT_DOMAIN, 'sales', 'fetch-contact-info',  Path("prompts/info_prompt.txt")),
-                    (DEFAULT_DOMAIN, 'sales', 'base-prompt', Path("prompts/sales_prompt.txt")),
-                    (DEFAULT_DOMAIN, 'sales', 'company', Path("prompts/company.txt")),
-                    (DEFAULT_DOMAIN, 'sales', 'intro-message', Path("prompts/intro_message.txt")),
-                    (DEFAULT_DOMAIN, 'generic', 'system', Path("prompts/generic_prompt.txt")),
-                ]
+        print("Prompts table is empty. Inserting default prompts...")
 
-                for domain, agent_type, prompt_type, text in default_prompts:
+        default_prompts = [
+            (DEFAULT_DOMAIN, 'generic', 'fetch-name', Path("prompts/name_prompt.txt")),
+            (DEFAULT_DOMAIN, 'sales', 'fetch-contact-info',  Path("prompts/info_prompt.txt")),
+            (DEFAULT_DOMAIN, 'sales', 'base-prompt', Path("prompts/sales_prompt.txt")),
+            (DEFAULT_DOMAIN, 'sales', 'company', Path("prompts/company.txt")),
+            (DEFAULT_DOMAIN, 'sales', 'intro-message', Path("prompts/intro_message.txt")),
+            (DEFAULT_DOMAIN, 'generic', 'system', Path("prompts/generic_prompt.txt")),
+        ]
 
-                    # If text is a file path → load JSON
-                    if isinstance(text, Path):
-                        text_json = load_json(text)
-                        if text_json is None:
-                            print(f"Skipping insertion for {text}")
-                            continue
-                        text_to_insert = text_json
-                    else:
-                        text_to_insert = text
+        for domain, agent_type, prompt_type, text in default_prompts:
 
-
-                    cur.execute("""
-                        INSERT INTO prompts (domain, agent_type, type, text)
-                        VALUES (%s, %s, %s, %s);
-                    """, (domain, agent_type, prompt_type, text_to_insert))
-
-                sync_connection.commit()
-                print("Default prompts inserted successfully.")
+            # If text is a file path -> load JSON
+            if isinstance(text, Path):
+                text_json = load_json(text)
+                if text_json is None:
+                    print(f"Skipping insertion for {text}")
+                    continue
+                text_to_insert = text_json
             else:
-                print("Prompts table already contains data. No insertion needed.")
+                text_to_insert = text
 
-    except Exception as e:
-        print(f"Error inserting prompts: {e}")
-        sync_connection.rollback()
+            cur.execute("""
+                INSERT INTO prompts (domain, agent_type, type, text)
+                VALUES (%s, %s, %s, %s);
+            """, (domain, agent_type, prompt_type, text_to_insert))
+
+        print("Default prompts inserted successfully.")
 
 
 def check_and_insert_default_domains(sync_connection):
@@ -93,43 +90,33 @@ def check_and_insert_default_domains(sync_connection):
         sync_connection.commit()
 
 # --- New prompt API helpers ---
-def get_all_prompts():
+@with_connection
+def get_all_prompts(conn):
     """
     Fetch all prompts from the prompts table.
     Returns a list of dicts.
     """
-    try:
-        from db import sync_connection
-        with sync_connection.cursor() as cur:
-            cur.execute("SELECT id, domain, agent_type, type, text, created_at FROM prompts;")
-            rows = cur.fetchall()
-            columns = [desc[0] for desc in cur.description]
-            return [dict(zip(columns, row)) for row in rows]
-    except Exception as e:
-        print(f"Error fetching prompts: {e}")
-        return []
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, domain, agent_type, type, text, created_at FROM prompts;")
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        return [dict(zip(columns, row)) for row in rows]
 
-def upsert_prompt(domain, agent_type, prompt_type, text):
+
+@with_connection
+def upsert_prompt(conn, domain, agent_type, prompt_type, text):
     """
     Insert or update a prompt based on (domain, agent_type, type).
     Returns True if successful, False otherwise.
     """
-    try:
-        from db import sync_connection
-        with sync_connection.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO prompts (domain, agent_type, type, text)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (domain, agent_type, type)
-                DO UPDATE SET text = EXCLUDED.text, created_at = CURRENT_TIMESTAMP;
-                """,
-                (domain, agent_type, prompt_type, text)
-            )
-            sync_connection.commit()
-            return True
-    except Exception as e:
-        print(f"Error upserting prompt: {e}")
-        sync_connection.rollback()
-        return False
-
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO prompts (domain, agent_type, type, text)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (domain, agent_type, type)
+            DO UPDATE SET text = EXCLUDED.text, created_at = CURRENT_TIMESTAMP;
+            """,
+            (domain, agent_type, prompt_type, text)
+        )
+        return True

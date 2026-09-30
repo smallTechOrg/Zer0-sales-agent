@@ -19,7 +19,6 @@ from http import HTTPStatus
 
 from flask_smorest import Blueprint, abort
 
-from db import sync_connection
 from domains import (
     DomainAlreadyExistsError,
     DomainRepository,
@@ -45,12 +44,13 @@ domains_bp = Blueprint(
 
 def _get_domain_service() -> DomainService:
     """
-    Construct a fully-wired ``DomainService`` using the shared DB connection.
+    Construct a fully-wired ``DomainService``.
 
-    Extracted into a named function so tests can patch it with
-    ``unittest.mock.patch("api.domains._get_domain_service")``.
+    The repository takes its connections from the shared pool per query, so
+    nothing is wired in here. Extracted into a named function so tests can
+    patch it with ``unittest.mock.patch("api.domains._get_domain_service")``.
     """
-    return DomainService(DomainRepository(sync_connection))
+    return DomainService(DomainRepository())
 
 
 # ---------------------------------------------------------------------------
