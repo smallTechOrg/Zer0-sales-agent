@@ -43,7 +43,7 @@ def kill_app_connections() -> int:
             cur.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE application_name = %s AND pid <> pg_backend_pid();",
-                (db_pool.APPLICATION_NAME,),
+                (db_pool.DB_APPLICATION_NAME,),
             )
             return len(cur.fetchall())
 
@@ -150,6 +150,11 @@ class TestSlowDatabase:
                 assert cur.fetchone()[0] != "0", "queries could hang indefinitely"
                 cur.execute("SHOW idle_in_transaction_session_timeout;")
                 assert cur.fetchone()[0] != "0", "a stuck transaction could pin a connection"
+                cur.execute("SHOW lock_timeout;")
+                assert cur.fetchone()[0] != "0", (
+                    "someone else's migration could pin both connections for the "
+                    "whole statement budget"
+                )
 
     def test_a_timed_out_query_is_not_retried(self):
         """
@@ -233,7 +238,7 @@ class TestSmallPool:
 
         assert all(not t.is_alive() for t in threads), "a request deadlocked"
         assert results == [200] * 12
-        assert db_pool.get_pool().get_stats()["pool_size"] <= db_pool.POOL_MAX_SIZE
+        assert db_pool.get_pool().get_stats()["pool_size"] <= db_pool.DB_POOL_MAX_SIZE
 
 
 # ---------------------------------------------------------------------------

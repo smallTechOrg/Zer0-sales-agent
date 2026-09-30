@@ -6,13 +6,21 @@ the schema. It exports ``get_connection`` / ``run_with_retry`` / ``ping`` as a
 convenience so callers have a single obvious import for database access.
 """
 import logging
-import os
 import threading
 import time
 
 import psycopg
 
-from config import DATABASE_URL, db_name, table_name
+from config import (
+    DATABASE_URL,
+    DB_BOOTSTRAP_ATTEMPTS,
+    DB_CONNECT_TIMEOUT,
+    DB_RETRY_BASE_DELAY,
+    DB_RETRY_MAX_DELAY,
+    DB_STARTUP_WAIT,
+    db_name,
+    table_name,
+)
 from db_pool import (  # noqa: F401  (re-exported for callers)
     DatabaseUnavailable,
     close_pool,
@@ -23,12 +31,7 @@ from db_pool import (  # noqa: F401  (re-exported for callers)
     run_with_retry,
     with_connection,
 )
-from db_pool import (
-    CONNECT_TIMEOUT,
-    RETRY_BASE_DELAY,
-    RETRY_MAX_DELAY,
-    RETRYABLE_ERRORS,
-)
+from db_pool import RETRYABLE_ERRORS
 from langchain_postgres import PostgresChatMessageHistory
 from prompts_table import check_and_insert_default_prompts
 
@@ -50,12 +53,6 @@ __all__ = [
     "table_name",
 ]
 
-# How long the background bootstrap keeps retrying after a failed first attempt.
-_BACKGROUND_RETRY_LIMIT = 60
-
-# How long startup waits for the schema before serving anyway. The database
-# being up makes this a no-op; it only caps the delay when it is down.
-STARTUP_WAIT = float(os.getenv("DB_STARTUP_WAIT", "5"))
 
 _schema_ready = threading.Event()
 _bootstrap_lock = threading.Lock()
@@ -77,7 +74,7 @@ def ensure_database_exists(database_url=DATABASE_URL, database=db_name):
     base_url = database_url.rsplit('/', 1)[0]
     postgres_url = f"{base_url}/postgres"
 
-    with psycopg.connect(postgres_url, connect_timeout=CONNECT_TIMEOUT) as temp_conn:
+    with psycopg.connect(postgres_url, connect_timeout=DB_CONNECT_TIMEOUT) as temp_conn:
         temp_conn.autocommit = True
         with temp_conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
@@ -249,7 +246,7 @@ def _bootstrap_once():
     _schema_ready.set()
 
 
-def _bootstrap_loop(limit=_BACKGROUND_RETRY_LIMIT):
+def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
     """
     Bootstrap the schema, retrying with backoff until it works.
 
@@ -257,7 +254,7 @@ def _bootstrap_loop(limit=_BACKGROUND_RETRY_LIMIT):
     Stops early on an error that retrying cannot fix, such as missing CREATE
     privileges, rather than logging the same failure sixty times.
     """
-    delay = RETRY_BASE_DELAY
+    delay = DB_RETRY_BASE_DELAY
     for attempt in range(1, limit + 1):
         try:
             _bootstrap_once()
@@ -274,7 +271,7 @@ def _bootstrap_loop(limit=_BACKGROUND_RETRY_LIMIT):
             )
             return
         time.sleep(delay)
-        delay = min(delay * 2, RETRY_MAX_DELAY)
+        delay = min(delay * 2, DB_RETRY_MAX_DELAY)
 
     logger.error(
         "Giving up on schema bootstrap after %s attempts. The app stays up; "
@@ -283,7 +280,7 @@ def _bootstrap_loop(limit=_BACKGROUND_RETRY_LIMIT):
     )
 
 
-def init_db(wait=STARTUP_WAIT):
+def init_db(wait=DB_STARTUP_WAIT):
     """
     Ensure the database and tables exist. Returns True if the schema is ready.
 

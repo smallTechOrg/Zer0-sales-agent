@@ -139,8 +139,9 @@ curl -s http://localhost:5000/health | python3 -m json.tool
 grep -E "Database unreachable|lost connection|reconnect"   /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
 ```
 
-**Connection pool settings** (optional, set in `.env`; defaults are in
-`code/db_pool.py`):
+**Connection pool settings.** Every environment-driven setting in this app is
+declared in `code/config.py` with its default; `.env` carries values only. See
+`code/.env.example` for the full list. The ones that matter most:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -154,6 +155,7 @@ grep -E "Database unreachable|lost connection|reconnect"   /home/vivek/Ai-agent-
 | `DB_HEALTH_TIMEOUT` | 5 | Budget for the `/health` probe |
 | `DB_STARTUP_WAIT` | 5 | Seconds startup waits for the schema before serving anyway |
 | `DB_STATEMENT_TIMEOUT_MS` | 10000 | Ceiling on one query, so an overloaded DB cannot park a request |
+| `DB_LOCK_TIMEOUT_MS` | 3000 | Fail fast when another process holds a lock |
 | `DB_IDLE_TX_TIMEOUT_MS` | 30000 | Backstop against a transaction pinning a connection |
 | `DB_TCP_USER_TIMEOUT_MS` | 20000 | Detects a server that went silent (Linux only) |
 
@@ -166,6 +168,13 @@ because no request holds a connection across the LLM call - every borrow is one
 query lasting milliseconds. Measured on this app, 50 simultaneous visitors
 (350 requests) complete in about 1s against 2 connections, and extra callers
 queue rather than fail.
+
+**If another process holds a lock** (a migration, a manual `ALTER TABLE`, or
+another app), the app's own queries block on it. With only two pooled
+connections, two blocked queries take the whole app out. `DB_LOCK_TIMEOUT_MS`
+caps that at 3s rather than letting it consume the full 10s statement budget -
+measured, the exposure drops from 10.3s to 3.1s, after which the pool recovers
+by itself.
 
 **If the database is reachable but not answering** (an overloaded shared
 instance: connections succeed, queries do not return), `DB_STATEMENT_TIMEOUT_MS`

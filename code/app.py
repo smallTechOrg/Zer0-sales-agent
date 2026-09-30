@@ -6,7 +6,7 @@ from flask_smorest import Api
 
 from api import register_blueprints
 from api.domains import domains_bp
-from config import DEBUG
+from config import DEBUG, PORT
 from db import init_db
 
 # ---------------------------------------------------------------------------
@@ -59,4 +59,4 @@ def chat_ui():
     return render_template('chat.html')
 
 if __name__ == "__main__":
-    app.run(debug=DEBUG, port=5001)
+    app.run(debug=DEBUG, port=PORT)

@@ -25,7 +25,6 @@ from __future__ import annotations
 import atexit
 import functools
 import logging
-import os
 import threading
 import time
 from contextlib import contextmanager
@@ -34,84 +33,39 @@ from typing import Any, Callable, Iterator, Optional, TypeVar
 import psycopg
 from psycopg_pool import ConnectionPool
 
-from config import DATABASE_URL
+from config import (
+    DATABASE_URL,
+    DB_APPLICATION_NAME,
+    DB_CONNECT_TIMEOUT,
+    DB_HEALTH_TIMEOUT,
+    DB_IDLE_TX_TIMEOUT_MS,
+    DB_KEEPALIVES_COUNT,
+    DB_KEEPALIVES_IDLE,
+    DB_KEEPALIVES_INTERVAL,
+    DB_LOCK_TIMEOUT_MS,
+    DB_POOL_MAX_IDLE,
+    DB_POOL_MAX_LIFETIME,
+    DB_POOL_MAX_SIZE,
+    DB_POOL_MIN_SIZE,
+    DB_POOL_TIMEOUT,
+    DB_RECONNECT_TIMEOUT,
+    DB_RETRY_ATTEMPTS,
+    DB_RETRY_BASE_DELAY,
+    DB_RETRY_MAX_DELAY,
+    DB_STATEMENT_TIMEOUT_MS,
+    DB_TCP_USER_TIMEOUT_MS,
+)
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 # ---------------------------------------------------------------------------
-# Tunables (env-overridable so staging and prod can differ without a code change)
-# ---------------------------------------------------------------------------
-
-# Deliberately small: the database is a shared, size-limited cloud instance, so
-# this app is a considerate tenant rather than one sized for its own peak. Two
-# is enough because no request ever holds a connection across an LLM call --
-# every borrow is a single query lasting milliseconds. Raising it is safe;
-# lowering it to 1 is not, since a queued request would then wait behind any
-# slow query with nothing else to run on.
-POOL_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "1"))
-POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "2"))
-
-# How long one attempt waits for a working connection. While the database is
-# down psycopg keeps retrying the connect inside this window, so this is also
-# how long a request rides out a restart before that attempt gives up.
-POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "5"))
-
-# Recycle connections so we never hand out one that a firewall, a proxy or the
-# server itself has silently closed.
-POOL_MAX_IDLE = float(os.getenv("DB_POOL_MAX_IDLE", "300"))
-POOL_MAX_LIFETIME = float(os.getenv("DB_POOL_MAX_LIFETIME", "3600"))
-
-# TCP-level connect timeout, so a dead host fails fast instead of hanging.
-CONNECT_TIMEOUT = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))
-
-# Ceiling on a single statement. Without this, a database that is reachable but
-# overloaded -- accepting connections, answering nothing -- parks a request
-# forever, and with a small pool a couple of those block every other caller.
-# Every query this app runs is a few milliseconds, so 10s is pure headroom.
-STATEMENT_TIMEOUT_MS = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "10000"))
-
-# A transaction should never sit open: get_connection commits or rolls back on
-# the way out. This is the backstop if a thread dies mid-transaction, so it
-# cannot pin one of our two connections indefinitely.
-IDLE_TX_TIMEOUT_MS = int(os.getenv("DB_IDLE_TX_TIMEOUT_MS", "30000"))
-
-# Notice a server that has gone silent rather than waiting on the socket
-# forever. statement_timeout is enforced by the server, so it cannot help when
-# the server stops answering at all; these are enforced by the kernel.
-# tcp_user_timeout bounds unacknowledged data (a hung query) and is a no-op on
-# platforms without TCP_USER_TIMEOUT, such as Windows.
-TCP_USER_TIMEOUT_MS = int(os.getenv("DB_TCP_USER_TIMEOUT_MS", "20000"))
-KEEPALIVES_IDLE = int(os.getenv("DB_KEEPALIVES_IDLE", "10"))
-KEEPALIVES_INTERVAL = int(os.getenv("DB_KEEPALIVES_INTERVAL", "5"))
-KEEPALIVES_COUNT = int(os.getenv("DB_KEEPALIVES_COUNT", "3"))
-
-# How long the pool's background reconnect keeps backing off (1s, 2s, 4s...)
-# before giving up on an attempt. psycopg defaults this to 300s, which means
-# that after a long outage the worker can be asleep for a minute or more and
-# the app stays down well after PostgreSQL is back. Capping it low keeps the
-# backoff short, and the next request schedules a fresh attempt immediately.
-RECONNECT_TIMEOUT = float(os.getenv("DB_RECONNECT_TIMEOUT", "10"))
-
-# Retry policy for connection-level failures.
+# Settings
 #
-# When the database is up, a retry costs nothing: the broken connection is
-# dropped and the next one works immediately. When it is down, the worst case a
-# caller waits is roughly
-#     RETRY_ATTEMPTS * POOL_TIMEOUT + the backoff between attempts
-# which with these defaults is about 16s. Long enough to ride out a database
-# restart, short enough not to pile up requests behind a real outage.
-RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "3"))
-RETRY_BASE_DELAY = float(os.getenv("DB_RETRY_BASE_DELAY", "0.5"))
-RETRY_MAX_DELAY = float(os.getenv("DB_RETRY_MAX_DELAY", "4"))
-
-# The health probe gets one normal attempt: long enough to see what a real
-# request would see, short enough that an external check gets a prompt 503
-# instead of timing out.
-HEALTH_TIMEOUT = float(os.getenv("DB_HEALTH_TIMEOUT", str(POOL_TIMEOUT)))
-
-APPLICATION_NAME = os.getenv("DB_APPLICATION_NAME", "ai-agent-boilerplate")
+# All of these are declared in config.py, which is the single place anything
+# environment-driven is defined. Nothing here reads os.getenv.
+# ---------------------------------------------------------------------------
 
 # Connection-level failures: the server went away, is restarting, or the pool
 # could not produce a connection. Every psycopg_pool error (PoolTimeout,
@@ -154,40 +108,41 @@ def _on_reconnect_failed(pool: ConnectionPool) -> None:
         "Pool %r could not reconnect within %ss. The app stays up and keeps "
         "retrying; /health reports the database as down until it succeeds.",
         pool.name,
-        RECONNECT_TIMEOUT,
+        DB_RECONNECT_TIMEOUT,
     )
 
 
 def _build_pool() -> ConnectionPool:
     pool = ConnectionPool(
         conninfo=DATABASE_URL,
-        min_size=POOL_MIN_SIZE,
-        max_size=POOL_MAX_SIZE,
-        timeout=POOL_TIMEOUT,
-        max_idle=POOL_MAX_IDLE,
-        max_lifetime=POOL_MAX_LIFETIME,
-        reconnect_timeout=RECONNECT_TIMEOUT,
+        min_size=DB_POOL_MIN_SIZE,
+        max_size=DB_POOL_MAX_SIZE,
+        timeout=DB_POOL_TIMEOUT,
+        max_idle=DB_POOL_MAX_IDLE,
+        max_lifetime=DB_POOL_MAX_LIFETIME,
+        reconnect_timeout=DB_RECONNECT_TIMEOUT,
         reconnect_failed=_on_reconnect_failed,
         # Validate the connection before lending it out: one killed by a
         # database restart is discarded and replaced here, instead of being
         # handed to a request that would then fail on its first statement.
         check=ConnectionPool.check_connection,
         kwargs={
-            "connect_timeout": CONNECT_TIMEOUT,
-            "application_name": APPLICATION_NAME,
+            "connect_timeout": DB_CONNECT_TIMEOUT,
+            "application_name": DB_APPLICATION_NAME,
             # Server-side ceilings, so no single query can hold a connection
             # (or a transaction) open indefinitely.
             "options": (
-                f"-c statement_timeout={STATEMENT_TIMEOUT_MS} "
-                f"-c idle_in_transaction_session_timeout={IDLE_TX_TIMEOUT_MS}"
+                f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS} "
+                f"-c lock_timeout={DB_LOCK_TIMEOUT_MS} "
+                f"-c idle_in_transaction_session_timeout={DB_IDLE_TX_TIMEOUT_MS}"
             ),
             # Kernel-side ceilings, for when the server stops answering at all
             # and cannot enforce its own timeouts.
             "keepalives": 1,
-            "keepalives_idle": KEEPALIVES_IDLE,
-            "keepalives_interval": KEEPALIVES_INTERVAL,
-            "keepalives_count": KEEPALIVES_COUNT,
-            "tcp_user_timeout": TCP_USER_TIMEOUT_MS,
+            "keepalives_idle": DB_KEEPALIVES_IDLE,
+            "keepalives_interval": DB_KEEPALIVES_INTERVAL,
+            "keepalives_count": DB_KEEPALIVES_COUNT,
+            "tcp_user_timeout": DB_TCP_USER_TIMEOUT_MS,
         },
         name="chatdb",
         open=False,
@@ -198,9 +153,9 @@ def _build_pool() -> ConnectionPool:
     pool.open(wait=False)
     logger.info(
         "Database pool opened (min=%s max=%s timeout=%ss)",
-        POOL_MIN_SIZE,
-        POOL_MAX_SIZE,
-        POOL_TIMEOUT,
+        DB_POOL_MIN_SIZE,
+        DB_POOL_MAX_SIZE,
+        DB_POOL_TIMEOUT,
     )
     return pool
 
@@ -286,7 +241,7 @@ def _track_borrow_depth() -> Iterator[None]:
             "outer query and release before borrowing again.",
             depth,
             threading.current_thread().name,
-            POOL_MAX_SIZE,
+            DB_POOL_MAX_SIZE,
             stack_info=True,
         )
     try:
@@ -309,7 +264,7 @@ def _getconn_with_retry(
     timeout: Optional[float] = None,
 ) -> psycopg.Connection:
     """Take a connection from the pool, retrying while the database is away."""
-    delay = RETRY_BASE_DELAY
+    delay = DB_RETRY_BASE_DELAY
     last_error: Optional[BaseException] = None
 
     for attempt in range(1, attempts + 1):
@@ -329,7 +284,7 @@ def _getconn_with_retry(
                 delay,
             )
             time.sleep(delay)
-            delay = min(delay * 2, RETRY_MAX_DELAY)
+            delay = min(delay * 2, DB_RETRY_MAX_DELAY)
 
     raise DatabaseUnavailable(
         f"No database connection after {attempts} attempt(s): {last_error}"
@@ -358,7 +313,7 @@ def get_connection(
     with _track_borrow_depth():
         conn = _getconn_with_retry(
             pool,
-            RETRY_ATTEMPTS if attempts is None else attempts,
+            DB_RETRY_ATTEMPTS if attempts is None else attempts,
             timeout,
         )
         try:
@@ -396,9 +351,9 @@ def run_with_retry(
     ``operation`` must be safe to run twice. Every caller in this codebase is
     a read or an idempotent upsert.
     """
-    attempts = RETRY_ATTEMPTS if attempts is None else attempts
+    attempts = DB_RETRY_ATTEMPTS if attempts is None else attempts
     what = label or getattr(operation, "__name__", "database operation")
-    delay = RETRY_BASE_DELAY
+    delay = DB_RETRY_BASE_DELAY
     last_error: Optional[BaseException] = None
 
     for attempt in range(1, attempts + 1):
@@ -422,7 +377,7 @@ def run_with_retry(
                 delay,
             )
             time.sleep(delay)
-            delay = min(delay * 2, RETRY_MAX_DELAY)
+            delay = min(delay * 2, DB_RETRY_MAX_DELAY)
 
     raise DatabaseUnavailable(
         f"{what} failed after {attempts} attempt(s): {last_error}"
@@ -472,5 +427,5 @@ def ping() -> None:
             cur.fetchone()
 
     run_with_retry(
-        _select_one, attempts=1, timeout=HEALTH_TIMEOUT, label="health check"
+        _select_one, attempts=1, timeout=DB_HEALTH_TIMEOUT, label="health check"
     )
