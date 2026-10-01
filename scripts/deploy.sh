@@ -6,18 +6,14 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
 	exec sudo -n "$0" "$@"
 fi
 
-APP_DIR=/opt/ai-agent-boilerplate/code
+APP_ROOT=/opt/ai-agent-boilerplate
+APP_DIR="$APP_ROOT/code"
 APP_PORT=5000
 PID_FILE=zero.pid
-# The full command line of the app, used both to confirm a PID really is ours
-# and as the fallback pattern. It is specific enough that it cannot match this
-# script -- which is what went wrong with `pkill -f "/opt/ai-agent-boilerplate"`,
-# since that matched deploy.sh's own path and killed the deploy mid-run.
-FLASK_CMD="flask run --host=0.0.0.0 --port=$APP_PORT"
 
 echo "==== Starting deploy.sh ===="
 
-cd /opt/ai-agent-boilerplate
+cd "$APP_ROOT"
 
 echo "Activating virtualenv..."
 source venv/bin/activate
@@ -36,13 +32,57 @@ python3 get_env.py
 
 echo "Restarting service..."
 
-# Is this PID actually our app? PIDs are reused, so after a reboot the number
-# in zero.pid can belong to an unrelated process -- and this script runs as
-# root, which can kill anything.
-is_our_flask() {
-    local pid="${1:-}"
+# ---------------------------------------------------------------------------
+# Identifying our own process
+#
+# Three things must all hold, because each previous approach broke one of them:
+#   - never kill an unrelated process (a PID from zero.pid can be recycled
+#     after a reboot, and this script runs as root)
+#   - never kill another Flask service on this machine (so "is it flask?" is
+#     not a sufficient test -- it has to be *this install*)
+#   - never leave our own old process running (it would hold port 5000 and
+#     database connections, and the deploy would silently serve stale code)
+#
+# So the test is the installation directory, not the command name. Another
+# service's processes live elsewhere and are skipped even when they are Flask
+# on the same port.
+# ---------------------------------------------------------------------------
+is_our_app() {
+    local pid="${1:-}" target
     [ -n "$pid" ] || return 1
-    ps -p "$pid" -o args= 2>/dev/null | grep -qF "$FLASK_CMD"
+    kill -0 "$pid" 2>/dev/null || return 1
+
+    # /proc is authoritative: it cannot be fooled by how the command line is
+    # spelled, and the venv binary and working directory both live under
+    # APP_ROOT for our process only.
+    for link in exe cwd; do
+        target=$(readlink -f "/proc/$pid/$link" 2>/dev/null || true)
+        case "$target" in
+            "$APP_ROOT"|"$APP_ROOT"/*) return 0 ;;
+        esac
+    done
+
+    # Fallback where /proc is unavailable. Both conditions are required: the
+    # install path alone also matches this very script, which is how
+    # `pkill -f "/opt/ai-agent-boilerplate"` used to kill the deploy mid-run.
+    local args
+    args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+    case "$args" in
+        *"$APP_ROOT"*) case "$args" in *"flask run"*) return 0 ;; esac ;;
+    esac
+    return 1
+}
+
+# PIDs listening on our port, using whichever tool the image has.
+listeners_on_port() {
+    if command -v ss >/dev/null 2>&1; then
+        ss -lptn "sport = :$APP_PORT" 2>/dev/null |
+            grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -t -i ":$APP_PORT" -sTCP:LISTEN 2>/dev/null | sort -u
+    elif command -v fuser >/dev/null 2>&1; then
+        fuser "$APP_PORT/tcp" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true
+    fi
 }
 
 # SIGTERM, wait up to 10s, then SIGKILL. SIGTERM matters: the app closes its
@@ -62,30 +102,42 @@ stop_pid() {
 
 echo "Stopping only ai-agent service..."
 
-# 1. The PID we recorded last time -- but only if it is still our Flask.
+# 1. The PID we recorded last time, if it is still this app.
 if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null || true)
-    if is_our_flask "$OLD_PID"; then
+    if is_our_app "$OLD_PID"; then
         stop_pid "$OLD_PID"
     else
-        echo "  ${PID_FILE} is stale (PID ${OLD_PID:-none} is not our app) - ignoring it"
+        echo "  $PID_FILE is stale (PID ${OLD_PID:-none} is not this app) - ignoring it"
     fi
     rm -f "$PID_FILE"
 fi
 
-# 2. Anything of ours still running without a PID file to point at it: a deploy
-#    that crashed before writing one, or a file that was deleted. Skipping this
-#    would leave the old process holding port 5000, the new one would fail to
-#    bind, and the deploy would report success while serving the old code.
-if pgrep -f "$FLASK_CMD" >/dev/null 2>&1; then
-    echo "  found an orphaned Flask with no PID file - stopping it"
-    pkill -f "$FLASK_CMD" 2>/dev/null || true
-    for _ in $(seq 1 10); do
-        pgrep -f "$FLASK_CMD" >/dev/null 2>&1 || break
-        sleep 1
-    done
-    pkill -9 -f "$FLASK_CMD" 2>/dev/null || true
-fi
+# 2. Any other process of ours still running, from a deploy that lost its PID
+#    file. Every candidate is checked against this installation, so a second
+#    Flask service on the machine is listed here and then skipped.
+for pid in $(pgrep -f "flask run" 2>/dev/null || true); do
+    if is_our_app "$pid"; then
+        echo "  found another instance of this app (PID $pid) with no PID file"
+        stop_pid "$pid"
+    fi
+done
+
+# 3. If something that is not ours holds the port, report it instead of killing
+#    it. Starting would fail to bind anyway, and killing someone else's service
+#    to take their port is never the right call.
+for pid in $(listeners_on_port); do
+    # It may have exited since we listed it -- including one we just stopped.
+    # A dead PID is not another service.
+    kill -0 "$pid" 2>/dev/null || continue
+    if ! is_our_app "$pid"; then
+        echo "❌ Port $APP_PORT is held by PID $pid, which is not this app:"
+        ps -p "$pid" -o pid=,user=,args= 2>/dev/null || true
+        echo "   Refusing to kill another service. Free the port, or point this"
+        echo "   app at a different APP_PORT."
+        exit 1
+    fi
+done
 
 echo "Starting Flask app..."
 cd "$APP_DIR"
