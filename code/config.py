@@ -114,10 +114,6 @@ DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "3"))
 DB_RETRY_BASE_DELAY = float(os.getenv("DB_RETRY_BASE_DELAY", "0.5"))
 DB_RETRY_MAX_DELAY = float(os.getenv("DB_RETRY_MAX_DELAY", "4"))
 
-# Seconds between pool checks. A check replaces connections that the server
-# closed, so the pool refills without an API request. 0 stops the checks.
-DB_CHECK_INTERVAL = float(os.getenv("DB_CHECK_INTERVAL", "30"))
-
 # Budget for the /health probe. One attempt.
 DB_HEALTH_TIMEOUT = float(os.getenv("DB_HEALTH_TIMEOUT", str(DB_POOL_TIMEOUT)))
 
