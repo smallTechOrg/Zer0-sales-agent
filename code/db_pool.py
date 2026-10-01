@@ -1,31 +1,22 @@
 """
 Shared PostgreSQL connection pool.
 
-Every database access in this application goes through the pool created here --
-including ``/health``. That is deliberate. When the health check opens its own
-connection it answers a different question from the one the rest of the API
-cares about: it can report "connected" while the connection the chat API is
-holding is already dead, or report a failure while the API is serving fine.
-One pool means one answer.
+All database access uses this pool, including /health. A separate connection in
+the health check can report a different state than the API sees.
 
-The pool also removes the two failure modes that came with a single long-lived
-module-level connection:
+The pool replaces one module-level connection. That connection had two faults:
+a database restart killed it and nothing made a new one, and all Flask threads
+used it together.
 
-* a connection dropped by a database restart was never replaced, so every
-  request after the restart failed until the whole app was restarted;
-* that one connection was shared by all of Flask's worker threads, so a failed
-  statement in one request left the transaction broken for the others.
-
-Connections are validated before they are lent out, recycled once they get old
-or idle, and acquisition is retried with exponential backoff so a request that
-arrives while PostgreSQL is restarting waits for it instead of failing outright.
+The pool tests each connection before it gives it to a caller, replaces old
+connections, and retries when the database is not available.
 """
 from __future__ import annotations
 
 import atexit
 import functools
-import logging
 import signal
+import traceback
 import threading
 import time
 from contextlib import contextmanager
@@ -57,32 +48,22 @@ from config import (
     DB_TCP_USER_TIMEOUT_MS,
 )
 
-logger = logging.getLogger(__name__)
-
 T = TypeVar("T")
 
-# ---------------------------------------------------------------------------
-# Settings
-#
-# All of these are declared in config.py, which is the single place anything
-# environment-driven is defined. Nothing here reads os.getenv.
-# ---------------------------------------------------------------------------
+# Settings come from config.py. This module does not read the environment.
 
-# Connection-level failures: the server went away, is restarting, or the pool
-# could not produce a connection. Every psycopg_pool error (PoolTimeout,
-# PoolClosed, TooManyRequests) subclasses OperationalError, so it is covered,
-# as do AdminShutdown (someone restarted the instance) and TooManyConnections
-# (a shared server is momentarily full) -- both worth another try.
-# Programming errors -- bad SQL, constraint violations -- are deliberately not
-# retried: repeating them would only fail again.
+# Retry these. The server stopped, restarted, or the pool gave no connection.
+# All psycopg_pool errors are OperationalError subclasses. Do not retry a
+# programming error: the same SQL fails again.
 RETRYABLE_ERRORS = (psycopg.OperationalError, psycopg.InterfaceError)
 
-# Hitting our own statement_timeout is the exception. It subclasses
-# OperationalError, but it does not mean the connection broke -- it means the
-# database was too slow to answer. Re-running the query adds load to a database
-# that is already struggling, which is how a slow database becomes a down one.
-# Fail fast instead and shed the request.
-NON_RETRYABLE_ERRORS = (psycopg.errors.QueryCanceled,)
+# Do not retry our own timeouts. QueryCanceled (57014) means the database is
+# slow. LockNotAvailable (55P03) means another process holds the lock. A retry
+# adds load or waits again.
+NON_RETRYABLE_ERRORS = (
+    psycopg.errors.QueryCanceled,
+    psycopg.errors.LockNotAvailable,
+)
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -105,11 +86,10 @@ _pool_lock = threading.Lock()
 
 def _on_reconnect_failed(pool: ConnectionPool) -> None:
     """Surface a prolonged outage in the logs instead of failing silently."""
-    logger.error(
-        "Pool %r could not reconnect within %ss. The app stays up and keeps "
-        "retrying; /health reports the database as down until it succeeds.",
-        pool.name,
-        DB_RECONNECT_TIMEOUT,
+    print(
+        f"Pool {pool.name!r} could not reconnect within {DB_RECONNECT_TIMEOUT}s. "
+        "The app stays up and keeps retrying; /health reports the database as "
+        "down until it succeeds."
     )
 
 
@@ -123,22 +103,18 @@ def _build_pool() -> ConnectionPool:
         max_lifetime=DB_POOL_MAX_LIFETIME,
         reconnect_timeout=DB_RECONNECT_TIMEOUT,
         reconnect_failed=_on_reconnect_failed,
-        # Validate the connection before lending it out: one killed by a
-        # database restart is discarded and replaced here, instead of being
-        # handed to a request that would then fail on its first statement.
+        # Test the connection first. Replace a connection that a restart killed.
         check=ConnectionPool.check_connection,
         kwargs={
             "connect_timeout": DB_CONNECT_TIMEOUT,
             "application_name": DB_APPLICATION_NAME,
-            # Server-side ceilings, so no single query can hold a connection
-            # (or a transaction) open indefinitely.
+            # Server limits for one query and one transaction.
             "options": (
                 f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS} "
                 f"-c lock_timeout={DB_LOCK_TIMEOUT_MS} "
                 f"-c idle_in_transaction_session_timeout={DB_IDLE_TX_TIMEOUT_MS}"
             ),
-            # Kernel-side ceilings, for when the server stops answering at all
-            # and cannot enforce its own timeouts.
+            # Kernel limits, for a server that stops to answer.
             "keepalives": 1,
             "keepalives_idle": DB_KEEPALIVES_IDLE,
             "keepalives_interval": DB_KEEPALIVES_INTERVAL,
@@ -148,15 +124,12 @@ def _build_pool() -> ConnectionPool:
         name="chatdb",
         open=False,
     )
-    # wait=False: the app has to start even when the database is down, so that
-    # /health can report the outage instead of the process dying at import time.
-    # Background workers keep trying to fill the pool.
+    # wait=False: the app must start when the database is down. /health then
+    # reports the fault.
     pool.open(wait=False)
-    logger.info(
-        "Database pool opened (min=%s max=%s timeout=%ss)",
-        DB_POOL_MIN_SIZE,
-        DB_POOL_MAX_SIZE,
-        DB_POOL_TIMEOUT,
+    print(
+        f"Database pool opened (min={DB_POOL_MIN_SIZE} max={DB_POOL_MAX_SIZE} "
+        f"timeout={DB_POOL_TIMEOUT}s)"
     )
     return pool
 
@@ -184,7 +157,7 @@ def close_pool() -> None:
     pool = _take_pool()
     if pool is not None:
         pool.close()
-        logger.info("Database pool closed")
+        print("Database pool closed")
 
 
 def _close_pool_at_exit() -> None:
@@ -241,11 +214,9 @@ def pool_status() -> dict:
 # Borrowing a connection
 # ---------------------------------------------------------------------------
 
-# Nesting guard. With a pool this small, a request that borrows a second
-# connection while still holding the first is a deadlock waiting to happen:
-# two such requests take one connection each and then wait on each other until
-# they time out. No path in this app nests (every borrow is one short query),
-# and this keeps it that way -- it is what fails the test if someone adds one.
+# A request must not take a second connection while it holds the first. With
+# two connections, two such requests wait for each other. The test uses this
+# counter.
 _borrow_depth = threading.local()
 max_borrow_depth_seen = 0
 
@@ -257,15 +228,14 @@ def _track_borrow_depth() -> Iterator[None]:
     _borrow_depth.value = depth
     max_borrow_depth_seen = max(max_borrow_depth_seen, depth)
     if depth > 1:
-        logger.warning(
-            "Nested database connection (depth %s) in thread %r. With "
-            "max_size=%s this risks deadlocking under concurrency: finish the "
-            "outer query and release before borrowing again.",
-            depth,
-            threading.current_thread().name,
-            DB_POOL_MAX_SIZE,
-            stack_info=True,
+        print(
+            f"Nested database connection (depth {depth}) in thread "
+            f"{threading.current_thread().name!r}. With "
+            f"max_size={DB_POOL_MAX_SIZE} this risks deadlocking under "
+            "concurrency: finish the outer query and release before borrowing "
+            "again."
         )
+        print("".join(traceback.format_stack()))
     try:
         yield
     finally:
@@ -276,8 +246,8 @@ def _rollback_quietly(conn: psycopg.Connection) -> None:
     """Roll back without masking the error that got us here."""
     try:
         conn.rollback()
-    except Exception as exc:  # pragma: no cover - the connection is already gone
-        logger.debug("Rollback on a broken connection failed: %s", exc)
+    except Exception:  # pragma: no cover - the connection is already gone
+        pass
 
 
 def _getconn_with_retry(
@@ -298,12 +268,9 @@ def _getconn_with_retry(
             last_error = exc
             if attempt == attempts:
                 break
-            logger.warning(
-                "Database unreachable (attempt %s/%s): %s -- retrying in %.1fs",
-                attempt,
-                attempts,
-                exc,
-                delay,
+            print(
+                f"Database unreachable (attempt {attempt}/{attempts}): {exc} "
+                f"-- retrying in {delay:.1f}s"
             )
             time.sleep(delay)
             delay = min(delay * 2, DB_RETRY_MAX_DELAY)
@@ -350,8 +317,7 @@ def get_connection(
                 _rollback_quietly(conn)
                 raise
         finally:
-            # putconn discards a connection it cannot reset, so a broken one
-            # never goes back into circulation.
+            # putconn discards a connection that it cannot reset.
             pool.putconn(conn)
 
 
@@ -380,8 +346,7 @@ def run_with_retry(
 
     for attempt in range(1, attempts + 1):
         try:
-            # attempts=1: this loop owns the backoff, so acquisition must not
-            # also back off and multiply the total wait.
+            # attempts=1: this loop applies the delay.
             with get_connection(attempts=1, timeout=timeout) as conn:
                 return operation(conn)
         except RETRYABLE_ERRORS as exc:
@@ -390,13 +355,9 @@ def run_with_retry(
             last_error = exc
             if attempt == attempts:
                 break
-            logger.warning(
-                "%s failed on a lost connection (attempt %s/%s): %s -- retrying in %.1fs",
-                what,
-                attempt,
-                attempts,
-                exc,
-                delay,
+            print(
+                f"{what} failed on a lost connection (attempt {attempt}/"
+                f"{attempts}): {exc} -- retrying in {delay:.1f}s"
             )
             time.sleep(delay)
             delay = min(delay * 2, DB_RETRY_MAX_DELAY)

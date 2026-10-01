@@ -27,19 +27,14 @@ python3 get_env.py
 
 echo "Restarting service..."
 
-# Stop only the process we started last time, by PID. Targeting one PID keeps
-# every other service on this machine out of it -- including the second Flask
-# app, which an earlier `pkill -f "/opt/ai-agent-boilerplate"` would have been
-# at risk of matching, along with this script itself.
+# Stop only the process from the last deploy, by PID. One PID keeps all other
+# services safe, including the second Flask app.
 #
-# NOTE: zero.pid must stay in .gitignore. update_app.sh runs `git clean -fd`
-# before this script, which deletes untracked files -- the PID file would go
-# with them, nothing would be stopped, and the new process would fail to bind
-# port 5000 while the old one kept serving.
+# Keep zero.pid in .gitignore. update_app.sh runs `git clean -fd` before this
+# script and deletes untracked files.
 echo "Stopping only ai-agent service..."
-# The PID is only trusted if it is still this app. PIDs are reused, so after a
-# reboot the recorded number can belong to an unrelated process -- and this
-# script runs as root, so there is no permission check to stop the kill.
+# Use the PID only if it is still this app. Linux uses a PID again after a
+# reboot. This script runs as root.
 if [ -f zero.pid ] && ps -p "$(cat zero.pid)" -o args= 2>/dev/null | grep -q "port=5000"; then
     OLD_PID=$(cat zero.pid)
     if kill "$OLD_PID" 2>/dev/null; then
@@ -53,9 +48,20 @@ if [ -f zero.pid ] && ps -p "$(cat zero.pid)" -o args= 2>/dev/null | grep -q "po
         fi
     fi
     rm -f zero.pid
-elif [ -f zero.pid ]; then
-    echo "zero.pid is stale (PID $(cat zero.pid) is not this app) - ignoring it"
-    rm -f zero.pid
+else
+    if [ -f zero.pid ]; then
+        echo "zero.pid is stale (PID $(cat zero.pid) is not this app) - ignoring it"
+        rm -f zero.pid
+    fi
+    # No usable PID file. The first deploy after this change has none, because
+    # the previous script did not write one. Stop the old process, or the new
+    # one cannot use port 5000.
+    #
+    # The pattern contains the port. It cannot match this script, which has no
+    # --port. It cannot match the other Flask service, which uses another port.
+    echo "No usable zero.pid; stopping any instance left by an earlier deploy"
+    pkill -f "flask run --host=0.0.0.0 --port=5000" 2>/dev/null || true
+    sleep 2
 fi
 
 echo "Starting Flask app..."
@@ -64,4 +70,25 @@ export FLASK_APP=app.py
 nohup flask run --host=0.0.0.0 --port=5000 > flask.log 2>&1 &
 echo $! > zero.pid
 
-echo "✅ Deployment complete!"
+# Make sure the app answers before you report success. nohup always succeeds.
+# A process that stops at startup leaves the old code in service.
+NEW_PID=$(cat zero.pid)
+for _ in $(seq 1 30); do
+    if ! kill -0 "$NEW_PID" 2>/dev/null; then
+        echo "❌ Flask exited during startup. Last 20 lines of flask.log:"
+        tail -20 flask.log || true
+        exit 1
+    fi
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+        http://127.0.0.1:5000/health 2>/dev/null || true)
+    # 503 is a good deploy with a bad database. The app starts on purpose.
+    if [ "$CODE" = "200" ] || [ "$CODE" = "503" ]; then
+        echo "✅ Deployment complete! (PID $NEW_PID, /health returned $CODE)"
+        exit 0
+    fi
+    sleep 1
+done
+
+echo "❌ App did not answer on port 5000 within 30s. Last 20 lines of flask.log:"
+tail -20 flask.log || true
+exit 1

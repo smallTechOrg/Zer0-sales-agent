@@ -1,5 +1,3 @@
-import logging
-
 from flask import Flask, render_template
 from flask_cors import CORS
 from flask_smorest import Api
@@ -14,11 +12,6 @@ from db import init_db
 # ---------------------------------------------------------------------------
 
 def create_app() -> Flask:
-    logging.basicConfig(
-        level=logging.DEBUG if DEBUG else logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
-
     flask_app = Flask(__name__)
 
     # -- Database ------------------------------------------------------------

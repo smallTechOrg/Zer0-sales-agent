@@ -133,6 +133,33 @@ class TestMalformedRequests:
 
 
 # ---------------------------------------------------------------------------
+# /health
+# ---------------------------------------------------------------------------
+
+class TestHealthReflectsSchema:
+    """
+    The probe is SELECT 1, which touches no table, so it succeeds against a
+    database whose schema was never created -- while every data endpoint
+    returns 500. Reporting the schema in the body but answering 200 made that
+    outage invisible to monitoring, which is the failure this project already
+    had once.
+    """
+
+    def test_missing_schema_is_not_a_200(self, client):
+        with patch("api.health.schema_ready", return_value=False):
+            response = client.get("/health")
+        assert response.status_code == 503
+        body = response.get_json()
+        assert body["schema"] == "pending"
+        assert "schema_error" in body
+
+    def test_ready_schema_is_a_200(self, client):
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.get_json()["schema"] == "ready"
+
+
+# ---------------------------------------------------------------------------
 # Behaviour when the database is unavailable
 # ---------------------------------------------------------------------------
 

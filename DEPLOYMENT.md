@@ -17,7 +17,7 @@ Guide for deploying, monitoring, and debugging the AI Agent Boilerplate applicat
 1. Push to configured branch triggers GitHub Actions
 2. GitHub Actions authenticates with GCP service account, SSHs to VM, executes scripts
 3. `update_app.sh`: Cleans logs, fetches branch from GCP metadata, pulls latest code (hard reset), runs `deploy.sh`
-4. `deploy.sh`: Activates venv, cleans `.env`/`flask.log`, installs dependencies, generates `.env` via `get_env.py`, stops the previous app via the PID in `code/zero.pid` (SIGTERM, then SIGKILL after 10s), starts Flask on `0.0.0.0:5000` in the background and records its PID
+4. `deploy.sh`: Activates venv, cleans `.env`/`flask.log`, installs dependencies, generates `.env` via `get_env.py`, stops the previous app via the PID in `code/zero.pid` (SIGTERM, then SIGKILL after 10s), starts Flask on `0.0.0.0:5000` in the background, records its PID, and waits for `/health` to answer before reporting success
 
 **Key Paths**:
 - Scripts: `/scripts/deploy.sh`, `/scripts/update_app.sh`
@@ -43,6 +43,10 @@ The probe runs through the same connection pool the chat and prompt endpoints
 use, so a green health check means those endpoints can reach the database too.
 `database: disconnected` with the app still answering is the expected state
 during a database outage - the app stays up and reconnects by itself.
+
+A 503 is also returned when the database is reachable but the schema has not
+been created (`"schema":"pending"`). The probe is `SELECT 1`, which touches no
+table and would otherwise pass while every data endpoint returns 500.
 
 **On VM**:
 ```bash
@@ -172,9 +176,14 @@ queue rather than fail.
 **If another process holds a lock** (a migration, a manual `ALTER TABLE`, or
 another app), the app's own queries block on it. With only two pooled
 connections, two blocked queries take the whole app out. `DB_LOCK_TIMEOUT_MS`
-caps that at 3s rather than letting it consume the full 10s statement budget -
-measured, the exposure drops from 10.3s to 3.1s, after which the pool recovers
-by itself.
+caps that at 3s rather than letting it consume the full 10s statement budget.
+
+A lock timeout raises `LockNotAvailable` (SQLSTATE 55P03), which is excluded
+from retries along with `QueryCanceled` (57014): retrying would wait again on a
+lock someone else still holds, costing the full retry budget instead of the
+timeout. Measured against an `ACCESS EXCLUSIVE` lock, a blocked query fails
+after 3.1s on one attempt, and the pool recovers as soon as the lock is
+released.
 
 **If the database is reachable but not answering** (an overloaded shared
 instance: connections succeed, queries do not return), `DB_STATEMENT_TIMEOUT_MS`

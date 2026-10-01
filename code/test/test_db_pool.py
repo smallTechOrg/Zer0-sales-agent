@@ -173,6 +173,29 @@ class TestSlowDatabase:
             db_pool.run_with_retry(too_slow)
         assert len(calls) == 1, "a slow database must not be hit three times"
 
+    def test_a_lock_timeout_is_not_retried(self):
+        """
+        lock_timeout raises LockNotAvailable (55P03), not QueryCanceled
+        (57014). Retrying waits again on a lock someone else still holds, and
+        with two pooled connections that pins the whole app for the full retry
+        budget instead of the lock timeout.
+        """
+        calls = []
+
+        def blocked(conn):
+            calls.append(1)
+            raise psycopg.errors.LockNotAvailable("canceling statement due to lock timeout")
+
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            db_pool.run_with_retry(blocked)
+        assert len(calls) == 1
+
+    def test_lock_timeout_is_configured(self):
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SHOW lock_timeout;")
+                assert cur.fetchone()[0] != "0"
+
     def test_a_lost_connection_is_still_retried(self):
         """The narrower no-retry rule must not disable retrying in general."""
         calls = []

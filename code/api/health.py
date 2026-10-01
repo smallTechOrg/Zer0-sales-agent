@@ -8,12 +8,14 @@ health_bp = Blueprint("health", __name__)
 @health_bp.route("/health", methods=["GET"])
 def health():
     """
-    Health check endpoint that verifies application and database connectivity.
+    Report the state of the app and the database.
 
-    The probe runs through the same connection pool the chat and prompt
-    endpoints use. Opening a separate connection here would answer a different
-    question: it could report "connected" while the pool the API actually
-    serves from is broken, or the other way round.
+    The probe uses the same pool as the other endpoints. A separate connection
+    can report a different state than the API sees.
+
+    The probe is SELECT 1 and uses no table. It passes when the schema does not
+    exist, but then each data endpoint fails. The status code also uses the
+    schema state.
     """
     status = {
         "message": "Hello World",
@@ -25,7 +27,6 @@ def health():
         ping()
         status["database"] = "connected"
         status["pool"] = pool_status()
-        return jsonify(status), 200
     except Exception as e:
         status["database_error"] = str(e)
         try:
@@ -33,3 +34,12 @@ def health():
         except Exception:
             pass
         return jsonify(status), 503
+
+    if not schema_ready():
+        status["schema_error"] = (
+            "The database is reachable but the schema has not been created. "
+            "Data endpoints will fail until it is."
+        )
+        return jsonify(status), 503
+
+    return jsonify(status), 200

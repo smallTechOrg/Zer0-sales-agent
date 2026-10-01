@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 from http import HTTPStatus
 from typing import List
 
@@ -6,54 +5,57 @@ from langchain_core.messages import BaseMessage
 from langchain_postgres import PostgresChatMessageHistory
 
 from config import table_name
-from db_pool import get_connection
+from db_pool import run_with_retry
 from system_prompt import get_prompt
 
 
-# ``PostgresChatMessageHistory.__init__`` only checks that *a* connection was
-# supplied. This stands in for one between operations; every method below swaps
-# in a real pooled connection before touching the database.
+# PostgresChatMessageHistory.__init__ only checks that a connection is given.
+# Each method below puts a pooled connection in place of this one.
 _UNBOUND = object()
 
 
 class PooledChatMessageHistory(PostgresChatMessageHistory):
     """
-    Chat history that borrows its connection from the pool per operation.
+    Chat history that takes a connection from the pool for each operation.
 
-    Upstream keeps one ``psycopg.Connection`` for the lifetime of the object and
-    commits on it. That cannot work with a pool: the connection would never go
-    back, and once a database restart killed it every later call on that object
-    would fail. Each method here checks a connection out, delegates to the
-    upstream SQL, and returns it.
+    The parent class keeps one connection for the life of the object. A pool
+    cannot work that way. Each method here takes a connection, runs the parent
+    SQL, then returns the connection.
 
-    Instances are per-request (``get_session_history`` builds a new one on every
-    call), so swapping ``_connection`` in and out is not shared across threads.
+    get_session_history makes a new object for each request, so the threads do
+    not share _connection.
     """
 
     def __init__(self, table: str, session_id: str) -> None:
         super().__init__(table, session_id, sync_connection=_UNBOUND)
 
-    @contextmanager
-    def _borrowed_connection(self):
-        """Hold a pooled connection for the duration of one operation."""
-        with get_connection() as conn:
+    def _run(self, operation, label):
+        """
+        Run one parent operation on a pooled connection. Retry if the
+        connection fails during the operation.
+
+        add_messages also retries. A retry can write a message two times if the
+        insert completed but the answer did not arrive. A repeated line is
+        better than a chat window that does not open.
+        """
+        def with_connection(conn):
             self._connection = conn
             try:
-                yield
+                return operation()
             finally:
                 self._connection = _UNBOUND
 
+        return run_with_retry(with_connection, label=label)
+
     def get_messages(self) -> List[BaseMessage]:
-        with self._borrowed_connection():
-            return super().get_messages()
+        return self._run(super().get_messages, "chat history read")
 
     def add_messages(self, messages) -> None:
-        with self._borrowed_connection():
-            super().add_messages(messages)
+        self._run(lambda: super(PooledChatMessageHistory, self).add_messages(messages),
+                  "chat history write")
 
     def clear(self) -> None:
-        with self._borrowed_connection():
-            super().clear()
+        self._run(super().clear, "chat history clear")
 
 
 def get_session_history(session_id):
@@ -71,15 +73,13 @@ def _message_mapping(messages):
 
 def get_history(session_id: str, domain):
     """
-    Retrieve chat history for a session_id as a list of dicts.
+    Get the chat history for a session_id as a list of dicts.
 
-    Failures propagate: the endpoint turns them into the one error shape this
-    API uses. Returning an error dict from here as well gave the same endpoint
-    two different failure bodies depending on where it broke.
+    Errors go to the caller. The endpoint makes the error response.
     """
     history = get_session_history(session_id)
     status = HTTPStatus.OK
-    # Read once: every access to .messages is now a round trip to the pool.
+    # Read one time. Each use of .messages goes to the database.
     messages = history.messages
     if not messages:
         # session exists

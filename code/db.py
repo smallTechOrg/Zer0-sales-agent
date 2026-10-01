@@ -5,9 +5,9 @@ Connections come from the shared pool in :mod:`db_pool`; this module owns only
 the schema. It exports ``get_connection`` / ``run_with_retry`` / ``ping`` as a
 convenience so callers have a single obvious import for database access.
 """
-import logging
 import threading
 import time
+import traceback
 
 import psycopg
 
@@ -34,8 +34,6 @@ from db_pool import (  # noqa: F401  (re-exported for callers)
 from db_pool import RETRYABLE_ERRORS
 from langchain_postgres import PostgresChatMessageHistory
 from prompts_table import check_and_insert_default_prompts
-
-logger = logging.getLogger(__name__)
 
 __all__ = [
     # Re-exported pool API, so callers have one obvious import for DB access.
@@ -80,9 +78,9 @@ def ensure_database_exists(database_url=DATABASE_URL, database=db_name):
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
             if not cur.fetchone():
                 cur.execute(f'CREATE DATABASE "{database}"')
-                logger.info("Database '%s' created successfully.", database)
+                print(f"Database '{database}' created successfully.")
             else:
-                logger.info("Database '%s' already exists.", database)
+                print(f"Database '{database}' already exists.")
 
 
 def ensure_chat_table_exists(sync_connection, table):
@@ -90,7 +88,7 @@ def ensure_chat_table_exists(sync_connection, table):
     Use LangChain's helper to make sure the chat history table exists.
     """
     PostgresChatMessageHistory.create_tables(sync_connection, table)
-    logger.info("Table '%s' created or verified.", table)
+    print(f"Table '{table}' created or verified.")
 
 
 def ensure_summaries_table_exists(sync_connection):
@@ -140,7 +138,7 @@ def ensure_summaries_table_exists(sync_connection):
 
         cur.execute("ALTER TABLE chat_info ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
 
-    logger.info("Table 'chat_info' created/verified successfully.")
+    print("Table 'chat_info' created/verified successfully.")
 
 
 def ensure_prompts_table_exists(sync_connection):
@@ -181,7 +179,7 @@ def ensure_prompts_table_exists(sync_connection):
         """
         cur.execute(alter_table_sql)
 
-    logger.info("Table 'prompts' created/verified successfully.")
+    print("Table 'prompts' created/verified successfully.")
 
 
 def ensure_domains_table_exists(sync_connection):
@@ -209,7 +207,7 @@ def ensure_domains_table_exists(sync_connection):
         """
         cur.execute(create_table_sql)
 
-    logger.info("Table 'domains' created/verified successfully.")
+    print("Table 'domains' created/verified successfully.")
 
 
 def _create_schema(sync_connection):
@@ -240,7 +238,7 @@ def _bootstrap_once():
         # 'postgres' maintenance database, and the application database is
         # provisioned for us anyway. That is not a failure: if the app database
         # is reachable, the schema step below works regardless.
-        logger.info("Skipping the database-creation check: %s", exc)
+        print(f"Skipping the database-creation check: {exc}")
 
     run_with_retry(_create_schema, attempts=1, label="schema bootstrap")
     _schema_ready.set()
@@ -258,25 +256,23 @@ def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
     for attempt in range(1, limit + 1):
         try:
             _bootstrap_once()
-            logger.info("Database schema ready (attempt %s).", attempt)
+            print(f"Database schema ready (attempt {attempt}).")
             return
         except RETRYABLE_ERRORS as exc:
-            logger.warning(
-                "Schema bootstrap attempt %s/%s failed: %s", attempt, limit, exc
-            )
+            print(f"Schema bootstrap attempt {attempt}/{limit} failed: {exc}")
         except Exception:
-            logger.exception(
-                "Schema bootstrap failed for a reason retrying will not fix. "
-                "The app stays up; fix the schema or privileges and restart."
-            )
-            return
+            # Keep retrying rather than giving up for good. Some failures here
+            # are transient without being connection errors -- two instances
+            # racing the same seed, for one -- and abandoning the loop left the
+            # schema permanently incomplete with no way back but a restart.
+            print(f"Schema bootstrap attempt {attempt}/{limit} failed unexpectedly")
+            print(traceback.format_exc())
         time.sleep(delay)
         delay = min(delay * 2, DB_RETRY_MAX_DELAY)
 
-    logger.error(
-        "Giving up on schema bootstrap after %s attempts. The app stays up; "
-        "/health will keep reporting the database as down.",
-        limit,
+    print(
+        f"Giving up on schema bootstrap after {limit} attempts. The app stays "
+        "up; /health will keep reporting the database as down."
     )
 
 
@@ -306,9 +302,8 @@ def init_db(wait=DB_STARTUP_WAIT):
             _bootstrap_thread.start()
 
     if not _schema_ready.wait(timeout=wait):
-        logger.error(
-            "Database not ready after %ss. Starting anyway and retrying in the "
-            "background; /health will report the database as down until it is.",
-            wait,
+        print(
+            f"Database not ready after {wait}s. Starting anyway and retrying in "
+            "the background; /health will report the database as down until it is."
         )
     return _schema_ready.is_set()

@@ -17,10 +17,8 @@ chat_bp = Blueprint("chat", __name__)
 # It receives a JSON request containing the user's chat input from the frontend, validates the input, sends the validated input to the LLM, and returns a JSON response.
 @chat_bp.route('/chat', methods=['POST'])
 def chat_api():
-    # Validation itself hits the database (the Origin has to resolve to a known
-    # domain), so it sits inside the try: otherwise a database outage escapes as
-    # a bare framework 500 and the client gets a different error shape than
-    # every other failure here.
+    # Validation uses the database, so it stays in the try block. The client
+    # then gets the same error shape for all faults.
     try:
         chat_validation_response = chat_api_validate(request)
         if not chat_validation_response.is_valid:
@@ -36,8 +34,7 @@ def chat_api():
         bot_response = get_groq_response(input.strip(), session_id, request_type, domain)
         return APIResponse(None,{'response': bot_response}).response(HTTPStatus.OK)
     except HTTPException:
-        # A malformed request (no JSON body, wrong content type) already carries
-        # the right status code. Let it through instead of relabelling it a 500.
+        # A bad request already has the correct status code. Do not change it.
         raise
     except Exception as e:
         print(f"Error during LLM call: {e}")
@@ -100,8 +97,7 @@ def get_chat_info():
 # History API to load previous messages while loading the page
 @chat_bp.route("/history", methods=["GET"])
 def history_endpoint():
-    # Same reason as /chat: validate_history_data queries the domains table, so
-    # a database outage has to come back in this endpoint's own error shape.
+    # validate_history_data uses the database. Keep it in the try block.
     try:
         history_validation_response = validate_history_data(request)
         if not history_validation_response.is_valid:
