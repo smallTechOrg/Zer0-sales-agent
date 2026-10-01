@@ -1,6 +1,6 @@
 """
 Database bootstrap: make the database and its tables if they do not exist.
-Connections come from the pool in db_pool, which this module also re-exports.
+Connections come from the pool in db_pool.
 """
 import threading
 import time
@@ -9,44 +9,13 @@ import traceback
 import psycopg
 
 import config
-from db_pool import (  # noqa: F401  (re-exported for callers)
-    DatabaseUnavailable,
-    close_pool,
-    get_connection,
-    get_pool,
-    ping,
-    pool_status,
-    run_with_retry,
-    with_connection,
-)
-from db_pool import RETRYABLE_ERRORS
+from db_pool import RETRYABLE_ERRORS, run_with_retry
 from langchain_postgres import PostgresChatMessageHistory
 from prompts_table import check_and_insert_default_prompts
 
-__all__ = [
-    # Re-exported pool API, so callers have one obvious import for DB access.
-    "DatabaseUnavailable",
-    "close_pool",
-    "get_connection",
-    "get_pool",
-    "ping",
-    "pool_status",
-    "run_with_retry",
-    "with_connection",
-    # Schema
-    "init_db",
-    "schema_ready",
-]
 
-
-_schema_ready = threading.Event()
 _bootstrap_lock = threading.Lock()
 _bootstrap_thread = None
-
-
-def schema_ready() -> bool:
-    """True once the tables have been created or verified at least once."""
-    return _schema_ready.is_set()
 
 
 def ensure_database_exists(database_url=config.DATABASE_URL, database=config.db_name):
@@ -214,7 +183,6 @@ def _bootstrap_once():
         print(f"Skipping the database-creation check: {exc}")
 
     run_with_retry(_create_schema, attempts=1, label="schema bootstrap")
-    _schema_ready.set()
 
 
 def _bootstrap_loop(limit=config.DB_BOOTSTRAP_ATTEMPTS):
@@ -236,21 +204,16 @@ def _bootstrap_loop(limit=config.DB_BOOTSTRAP_ATTEMPTS):
         delay = min(delay * 2, config.DB_RETRY_MAX_DELAY)
 
     print(
-        f"Giving up on schema bootstrap after {limit} attempts. The app stays "
-        "up; /health will keep reporting the database as down."
+        f"Giving up on schema bootstrap after {limit} attempts. The app stays up."
     )
 
 
 def init_db(wait=config.DB_STARTUP_WAIT):
     """
-    Make the database and tables if they do not exist. Return True when the
-    schema is ready. Never raise, and never wait more than *wait* seconds. A
-    background thread continues the work.
+    Make the database and tables if they do not exist. Never raise, and never
+    wait more than *wait* seconds. A background thread continues the work.
     """
     global _bootstrap_thread
-
-    if _schema_ready.is_set():
-        return True
 
     with _bootstrap_lock:
         if _bootstrap_thread is None:
@@ -259,9 +222,4 @@ def init_db(wait=config.DB_STARTUP_WAIT):
             )
             _bootstrap_thread.start()
 
-    if not _schema_ready.wait(timeout=wait):
-        print(
-            f"Database not ready after {wait}s. Starting anyway and retrying in "
-            "the background; /health will report the database as down until it is."
-        )
-    return _schema_ready.is_set()
+    _bootstrap_thread.join(timeout=wait)

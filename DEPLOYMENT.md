@@ -35,7 +35,7 @@ Guide for deploying, monitoring, and debugging the AI Agent Boilerplate applicat
 ```bash
 curl http://<VM_EXTERNAL_IP>:5000/health
 # 200 when the database is reachable, 503 when it is not:
-# {"message":"Hello World","database":"connected","schema":"ready",
+# {"message":"Hello World","database":"connected",
 #  "pool":{"min_size":1,"max_size":2,"size":2,"available":2,"waiting":0,"connections_lost":0}}
 ```
 
@@ -43,10 +43,6 @@ The probe runs through the same connection pool the chat and prompt endpoints
 use, so a green health check means those endpoints can reach the database too.
 `database: disconnected` with the app still answering is the expected state
 during a database outage - the app stays up and reconnects by itself.
-
-A 503 is also returned when the database is reachable but the schema has not
-been created (`"schema":"pending"`). The probe is `SELECT 1`, which touches no
-table and would otherwise pass while every data endpoint returns 500.
 
 **On VM**:
 ```bash
@@ -120,8 +116,7 @@ does not, the database is still unreachable - check the server, not the app.
 `DB_STARTUP_WAIT` seconds for the schema, then serves regardless, so `/health`
 answers 503 within seconds rather than the process hanging. A background thread
 keeps retrying and creates the schema as soon as the database appears - watch
-for `Database schema ready` in `flask.log`. Until then `/health` reports
-`"schema":"pending"`.
+for `Database schema ready` in `flask.log`.
 
 Measured behaviour during a full outage:
 
