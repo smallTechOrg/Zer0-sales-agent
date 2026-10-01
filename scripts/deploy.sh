@@ -28,11 +28,25 @@ python3 get_env.py
 echo "Restarting service..."
 
 echo "Stopping only ai-agent service..."
-pkill -f "/opt/ai-agent-boilerplate"
+if [ -f zero.pid ]; then
+    OLD_PID=$(cat zero.pid)
+    if kill "$OLD_PID" 2>/dev/null; then
+        for i in $(seq 1 10); do
+            kill -0 "$OLD_PID" 2>/dev/null || break
+            sleep 1
+        done
+        if kill -0 "$OLD_PID" 2>/dev/null; then
+            echo "PID $OLD_PID still alive after 10s, sending SIGKILL..."
+            kill -9 "$OLD_PID" || true
+        fi
+    fi
+    rm -f zero.pid
+fi
 
+echo "Starting Flask app..."
 cd /opt/ai-agent-boilerplate/code
 export FLASK_APP=app.py
 nohup flask run --host=0.0.0.0 --port=5000 > flask.log 2>&1 &
-
+echo $! > zero.pid
 
 echo "✅ Deployment complete!"

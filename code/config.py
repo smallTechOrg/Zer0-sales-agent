@@ -144,7 +144,7 @@ DB_HEALTH_TIMEOUT = float(os.getenv("DB_HEALTH_TIMEOUT", str(DB_POOL_TIMEOUT)))
 
 # Shows up in pg_stat_activity, so this app's connections are identifiable on a
 # shared instance.
-DB_APPLICATION_NAME = os.getenv("DB_APPLICATION_NAME", "ai-agent-boilerplate")
+DB_APPLICATION_NAME = os.getenv("DB_APPLICATION_NAME", "zero-sales-agent")
 
 # How long startup waits for the schema before serving anyway, and how many
 # times the background bootstrap retries after that.

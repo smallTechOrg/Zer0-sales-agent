@@ -17,7 +17,7 @@ Guide for deploying, monitoring, and debugging the AI Agent Boilerplate applicat
 1. Push to configured branch triggers GitHub Actions
 2. GitHub Actions authenticates with GCP service account, SSHs to VM, executes scripts
 3. `update_app.sh`: Cleans logs, fetches branch from GCP metadata, pulls latest code (hard reset), runs `deploy.sh`
-4. `deploy.sh`: Activates venv at `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate`, cleans `.env`/`flask.log`, installs dependencies, generates `.env` via `get_env.py`, kills old Flask processes, starts Flask on `0.0.0.0:5000` (background)
+4. `deploy.sh`: Activates venv, cleans `.env`/`flask.log`, installs dependencies, generates `.env` via `get_env.py`, stops the previous app via the PID in `code/zero.pid` (SIGTERM, then SIGKILL after 10s), starts Flask on `0.0.0.0:5000` in the background and records its PID
 
 **Key Paths**:
 - Scripts: `/scripts/deploy.sh`, `/scripts/update_app.sh`
@@ -192,12 +192,21 @@ Lowering to 1 is not advised - a queued request would then sit behind any slow
 query with nothing else to run on.
 
 **6. Port Already in Use**
+
+`deploy.sh` stops the previous app using the PID in `code/zero.pid`. If that
+file is missing or stale the old process survives and the new one cannot bind.
+
 ```bash
-sudo lsof -i :5000                    # Find PID
-sudo kill -9 <PID>                    # Kill process
-pkill -f flask                        # Kill all Flask
-cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate && ./scripts/deploy.sh
+cat /opt/ai-agent-boilerplate/code/zero.pid   # what deploy.sh thinks is running
+sudo lsof -i :5000                            # what actually holds the port
+sudo kill <PID>                               # SIGTERM: the app closes its DB pool
+sudo kill -9 <PID>                            # only if it ignores SIGTERM
+cd /opt/ai-agent-boilerplate && ./scripts/deploy.sh
 ```
+
+A stale `zero.pid` is worth knowing about: after a reboot the recorded PID can
+belong to an unrelated process, and `deploy.sh` runs as root. Check it matches
+a Flask process before trusting it.
 
 ### Complete Debugging Checklist
 
@@ -247,8 +256,8 @@ cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate && ./scripts/deploy.sh
 # Live logs
 tail -f /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
 
-# Restart
-pkill -f flask && cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate && ./scripts/deploy.sh
+# Restart (deploy.sh stops the old process by PID and starts a new one)
+cd /opt/ai-agent-boilerplate && ./scripts/deploy.sh
 
 # Health check
 curl http://localhost:5000/health

@@ -25,6 +25,7 @@ from __future__ import annotations
 import atexit
 import functools
 import logging
+import signal
 import threading
 import time
 from contextlib import contextmanager
@@ -199,7 +200,28 @@ def _close_pool_at_exit() -> None:
         pool.close()
 
 
+def _handle_sigterm(signum, frame):
+    """
+    Close the pool when the deploy script stops the app.
+
+    deploy.sh stops the old process with `kill`, and Python's default SIGTERM
+    disposition terminates the process outright -- atexit handlers never run,
+    so the connections would be left for the server to reap. On a shared
+    instance it is worth handing them back deliberately.
+
+    SIGINT needs no handler: it raises KeyboardInterrupt, the interpreter shuts
+    down normally, and atexit runs.
+    """
+    _close_pool_at_exit()
+    raise SystemExit(128 + signum)
+
+
 atexit.register(_close_pool_at_exit)
+
+try:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+except (ValueError, OSError):  # pragma: no cover - not the main thread
+    pass
 
 
 def pool_status() -> dict:
