@@ -37,7 +37,10 @@ echo "Restarting service..."
 # with them, nothing would be stopped, and the new process would fail to bind
 # port 5000 while the old one kept serving.
 echo "Stopping only ai-agent service..."
-if [ -f zero.pid ]; then
+# The PID is only trusted if it is still this app. PIDs are reused, so after a
+# reboot the recorded number can belong to an unrelated process -- and this
+# script runs as root, so there is no permission check to stop the kill.
+if [ -f zero.pid ] && ps -p "$(cat zero.pid)" -o args= 2>/dev/null | grep -q "port=5000"; then
     OLD_PID=$(cat zero.pid)
     if kill "$OLD_PID" 2>/dev/null; then
         for i in $(seq 1 10); do
@@ -49,6 +52,9 @@ if [ -f zero.pid ]; then
             kill -9 "$OLD_PID" || true
         fi
     fi
+    rm -f zero.pid
+elif [ -f zero.pid ]; then
+    echo "zero.pid is stale (PID $(cat zero.pid) is not this app) - ignoring it"
     rm -f zero.pid
 fi
 
