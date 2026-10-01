@@ -23,6 +23,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import db_pool  # noqa: E402
+import config  # noqa: E402
 from config import DATABASE_URL  # noqa: E402
 
 
@@ -43,7 +44,7 @@ def kill_app_connections() -> int:
             cur.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE application_name = %s AND pid <> pg_backend_pid();",
-                (db_pool.DB_APPLICATION_NAME,),
+                (config.DB_APPLICATION_NAME,),
             )
             return len(cur.fetchall())
 
@@ -261,7 +262,7 @@ class TestSmallPool:
 
         assert all(not t.is_alive() for t in threads), "a request deadlocked"
         assert results == [200] * 12
-        assert db_pool.get_pool().get_stats()["pool_size"] <= db_pool.DB_POOL_MAX_SIZE
+        assert db_pool.get_pool().get_stats()["pool_size"] <= config.DB_POOL_MAX_SIZE
 
 
 # ---------------------------------------------------------------------------

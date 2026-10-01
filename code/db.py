@@ -8,16 +8,7 @@ import traceback
 
 import psycopg
 
-from config import (
-    DATABASE_URL,
-    DB_BOOTSTRAP_ATTEMPTS,
-    DB_CONNECT_TIMEOUT,
-    DB_RETRY_BASE_DELAY,
-    DB_RETRY_MAX_DELAY,
-    DB_STARTUP_WAIT,
-    db_name,
-    table_name,
-)
+import config
 from db_pool import (  # noqa: F401  (re-exported for callers)
     DatabaseUnavailable,
     close_pool,
@@ -45,7 +36,6 @@ __all__ = [
     # Schema
     "init_db",
     "schema_ready",
-    "table_name",
 ]
 
 
@@ -59,7 +49,7 @@ def schema_ready() -> bool:
     return _schema_ready.is_set()
 
 
-def ensure_database_exists(database_url=DATABASE_URL, database=db_name):
+def ensure_database_exists(database_url=config.DATABASE_URL, database=config.db_name):
     """
     Connect to the 'postgres' system database and create *database* if missing.
 
@@ -69,7 +59,7 @@ def ensure_database_exists(database_url=DATABASE_URL, database=db_name):
     base_url = database_url.rsplit('/', 1)[0]
     postgres_url = f"{base_url}/postgres"
 
-    with psycopg.connect(postgres_url, connect_timeout=DB_CONNECT_TIMEOUT) as temp_conn:
+    with psycopg.connect(postgres_url, connect_timeout=config.DB_CONNECT_TIMEOUT) as temp_conn:
         temp_conn.autocommit = True
         with temp_conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
@@ -203,7 +193,7 @@ def _create_schema(sync_connection):
     roll back the tables the earlier ones already created.
     """
     steps = (
-        lambda conn: ensure_chat_table_exists(conn, table_name),
+        lambda conn: ensure_chat_table_exists(conn, config.table_name),
         ensure_summaries_table_exists,
         ensure_prompts_table_exists,
         ensure_domains_table_exists,
@@ -227,9 +217,9 @@ def _bootstrap_once():
     _schema_ready.set()
 
 
-def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
+def _bootstrap_loop(limit=config.DB_BOOTSTRAP_ATTEMPTS):
     """Make the schema. Retry with an increasing delay until it is done."""
-    delay = DB_RETRY_BASE_DELAY
+    delay = config.DB_RETRY_BASE_DELAY
     for attempt in range(1, limit + 1):
         try:
             _bootstrap_once()
@@ -243,7 +233,7 @@ def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
             print(f"Schema bootstrap attempt {attempt}/{limit} failed unexpectedly")
             print(traceback.format_exc())
         time.sleep(delay)
-        delay = min(delay * 2, DB_RETRY_MAX_DELAY)
+        delay = min(delay * 2, config.DB_RETRY_MAX_DELAY)
 
     print(
         f"Giving up on schema bootstrap after {limit} attempts. The app stays "
@@ -251,7 +241,7 @@ def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
     )
 
 
-def init_db(wait=DB_STARTUP_WAIT):
+def init_db(wait=config.DB_STARTUP_WAIT):
     """
     Make the database and tables if they do not exist. Return True when the
     schema is ready. Never raise, and never wait more than *wait* seconds. A
