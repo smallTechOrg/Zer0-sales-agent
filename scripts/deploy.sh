@@ -35,40 +35,47 @@ echo "Restarting service..."
 # ---------------------------------------------------------------------------
 # Identifying our own process
 #
-# Three things must all hold, because each previous approach broke one of them:
+# Three things must all hold, because each earlier approach broke one:
 #   - never kill an unrelated process (a PID from zero.pid can be recycled
 #     after a reboot, and this script runs as root)
-#   - never kill another Flask service on this machine (so "is it flask?" is
-#     not a sufficient test -- it has to be *this install*)
-#   - never leave our own old process running (it would hold port 5000 and
+#   - never kill the other service on this machine (it is also Flask, so
+#     "is it flask?" is not a test -- it just runs on its own port)
+#   - never leave our own old process running (it would hold the port and
 #     database connections, and the deploy would silently serve stale code)
 #
-# So the test is the installation directory, not the command name. Another
-# service's processes live elsewhere and are skipped even when they are Flask
-# on the same port.
+# So a process is ours only if BOTH match: our port, and our install
+# directory. Either alone is not enough -- another service could be moved onto
+# this port, and a second copy of this app could be installed elsewhere.
 # ---------------------------------------------------------------------------
 is_our_app() {
-    local pid="${1:-}" target
+    local pid="${1:-}" args target
     [ -n "$pid" ] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
 
-    # /proc is authoritative: it cannot be fooled by how the command line is
-    # spelled, and the venv binary and working directory both live under
-    # APP_ROOT for our process only.
-    for link in exe cwd; do
+    args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+
+    # Our port. The other service on this machine runs on a different one, so
+    # this is what separates them. It also excludes this very script, whose
+    # command line has no --port -- which is how the original
+    # `pkill -f "/opt/ai-agent-boilerplate"` killed the deploy mid-run.
+    case "$args" in
+        *"--port=$APP_PORT"*|*"--port $APP_PORT"*) ;;
+        *) return 1 ;;
+    esac
+
+    # And our installation. /proc is authoritative and cannot be fooled by how
+    # the command line is spelled; cwd is the dependable one, since this script
+    # cds into APP_DIR before launching.
+    for link in cwd exe; do
         target=$(readlink -f "/proc/$pid/$link" 2>/dev/null || true)
         case "$target" in
             "$APP_ROOT"|"$APP_ROOT"/*) return 0 ;;
         esac
     done
 
-    # Fallback where /proc is unavailable. Both conditions are required: the
-    # install path alone also matches this very script, which is how
-    # `pkill -f "/opt/ai-agent-boilerplate"` used to kill the deploy mid-run.
-    local args
-    args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+    # Fallback where /proc is unreadable.
     case "$args" in
-        *"$APP_ROOT"*) case "$args" in *"flask run"*) return 0 ;; esac ;;
+        *"$APP_ROOT"*) return 0 ;;
     esac
     return 1
 }

@@ -22,6 +22,9 @@ OTHER_FLASK="/srv/other-service/venv/bin/python /srv/other-service/venv/bin/flas
 OTHER_FLASK_SAME_PORT="/srv/other-service/venv/bin/python /srv/other-service/venv/bin/flask run --host=0.0.0.0 --port=5000"
 SSHD="/usr/sbin/sshd -D"
 DEPLOY_SCRIPT="/bin/bash /opt/ai-agent-boilerplate/scripts/deploy.sh"
+# Same install, different port: a second copy of this app must not be killed
+# either, which is why the port is part of the identity and not just the path.
+OURS_OTHER_PORT="/opt/ai-agent-boilerplate/venv/bin/python /opt/ai-agent-boilerplate/venv/bin/flask run --host=0.0.0.0 --port=5050"
 
 # --- fake process table ----------------------------------------------------
 # PROC[pid]=command line   PROC_ROOT[pid]=install dir (stands in for /proc)
@@ -156,6 +159,17 @@ scenario "" "" \
     4242 "$OURS" "$APP_ROOT"
 check "the deploy script is not killed" "yes" "$(grep -qx 9999 "$SURVIVORS" && echo yes || echo no)"
 check "the app still is" " term:4242" "$KILLED"
+
+echo
+echo "=== 7b. A second copy of THIS app on a different port ==="
+scenario "" "" 6060 "$OURS_OTHER_PORT" "$APP_ROOT"
+check "the other port's instance is NOT killed" "" "$KILLED"
+
+echo
+echo "=== 7c. That instance alongside ours: only ours goes ==="
+scenario "4242" "4242"     4242 "$OURS" "$APP_ROOT"     6060 "$OURS_OTHER_PORT" "$APP_ROOT"
+check "only our port's instance is stopped" " term:4242" "$KILLED"
+check "the other port's instance survives" "yes" "$(grep -qx 6060 "$SURVIVORS" && echo yes || echo no)"
 
 echo
 echo "=== 8. Nothing running ==="
