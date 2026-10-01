@@ -98,11 +98,33 @@ def _build_pool() -> ConnectionPool:
     # wait=False: the app must start when the database is down. /health then
     # reports the fault.
     pool.open(wait=False)
+    if config.DB_CHECK_INTERVAL > 0:
+        threading.Thread(
+            target=_check_pool_forever,
+            args=(pool, config.DB_CHECK_INTERVAL),
+            name="db-pool-check",
+            daemon=True,
+        ).start()
     print(
         f"Database pool opened (min={config.DB_POOL_MIN_SIZE} max={config.DB_POOL_MAX_SIZE} "
         f"timeout={config.DB_POOL_TIMEOUT}s)"
     )
     return pool
+
+
+def _check_pool_forever(pool: ConnectionPool, interval: float) -> None:
+    """
+    Test the pooled connections on a timer. A database restart closes them all,
+    and without this the pool waits for the next request to find out.
+    """
+    while not pool.closed:
+        time.sleep(interval)
+        if pool.closed:
+            return
+        try:
+            pool.check()
+        except Exception as exc:
+            print(f"Pool check failed: {exc}")
 
 
 def get_pool() -> ConnectionPool:

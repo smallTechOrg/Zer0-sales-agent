@@ -14,6 +14,7 @@ Like the other tests in this project, these need a live database.
 import sys
 import os
 import threading
+import time
 import uuid
 from unittest.mock import patch
 
@@ -209,6 +210,40 @@ class TestSlowDatabase:
 
         assert db_pool.run_with_retry(flaky) == "recovered"
         assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# Refilling the pool
+# ---------------------------------------------------------------------------
+
+class TestPoolCheck:
+    """
+    A restart closes every connection. The pool does not find out until the
+    next request, so a timer calls check() and refills it first.
+    """
+
+    def test_a_checker_thread_runs(self):
+        db_pool.get_pool()
+        names = [t.name for t in threading.enumerate()]
+        assert "db-pool-check" in names
+
+    def test_check_replaces_the_closed_connections(self):
+        pool = db_pool.get_pool()
+        db_pool.ping()
+        # get_stats omits a counter that is still zero.
+        before = pool.get_stats().get("connections_lost", 0)
+
+        kill_app_connections()
+        pool.check()
+
+        for _ in range(50):
+            if pool.get_stats()["pool_size"] >= config.DB_POOL_MIN_SIZE:
+                break
+            time.sleep(0.1)
+
+        assert pool.get_stats().get("connections_lost", 0) > before
+        assert pool.get_stats()["pool_size"] >= config.DB_POOL_MIN_SIZE
+        db_pool.ping()
 
 
 # ---------------------------------------------------------------------------
