@@ -1,9 +1,6 @@
 """
-Database bootstrap: create the database and its tables if they are missing.
-
-Connections come from the shared pool in :mod:`db_pool`; this module owns only
-the schema. It exports ``get_connection`` / ``run_with_retry`` / ``ping`` as a
-convenience so callers have a single obvious import for database access.
+Database bootstrap: make the database and its tables if they do not exist.
+Connections come from the pool in db_pool, which this module also re-exports.
 """
 import threading
 import time
@@ -142,13 +139,7 @@ def ensure_summaries_table_exists(sync_connection):
 
 
 def ensure_prompts_table_exists(sync_connection):
-    """
-    Create or verify a 'prompts' table with columns:
-      - domain : domain, under which prompt is, example as common, smalltech, client
-      - agent_type -- Determines the type of agent, example as Sales, generic
-      - type -- What the prompt use for, example as name_prompt, sales prompt, info_prompt, generic
-      - text -- prompt itself
-    """
+    """Make the prompts table. Columns: domain, agent_type, type, text."""
     with sync_connection.cursor() as cur:
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS prompts (
@@ -183,13 +174,7 @@ def ensure_prompts_table_exists(sync_connection):
 
 
 def ensure_domains_table_exists(sync_connection):
-    """
-    Create or verify a 'domains' table with columns:
-      - key : unique identifier example common, smalltech, client
-      - address : url for the example domain smalltech.in
-      - parent key : parent key for domain key
-    Note: column name 'key' will be created quoted to avoid ambiguity; it's still a valid column name.
-    """
+    """Make the domains table. Columns: key, address, parent."""
     with sync_connection.cursor() as cur:
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS domains (
@@ -234,10 +219,8 @@ def _bootstrap_once():
     try:
         ensure_database_exists()
     except Exception as exc:
-        # A shared or managed cloud database usually denies access to the
-        # 'postgres' maintenance database, and the application database is
-        # provisioned for us anyway. That is not a failure: if the app database
-        # is reachable, the schema step below works regardless.
+        # A managed database usually denies the 'postgres' database. This is
+        # not a fault: the schema step below still works.
         print(f"Skipping the database-creation check: {exc}")
 
     run_with_retry(_create_schema, attempts=1, label="schema bootstrap")
@@ -245,13 +228,7 @@ def _bootstrap_once():
 
 
 def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
-    """
-    Bootstrap the schema, retrying with backoff until it works.
-
-    Runs on a daemon thread so a database that is down never holds up startup.
-    Stops early on an error that retrying cannot fix, such as missing CREATE
-    privileges, rather than logging the same failure sixty times.
-    """
+    """Make the schema. Retry with an increasing delay until it is done."""
     delay = DB_RETRY_BASE_DELAY
     for attempt in range(1, limit + 1):
         try:
@@ -261,10 +238,8 @@ def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
         except RETRYABLE_ERRORS as exc:
             print(f"Schema bootstrap attempt {attempt}/{limit} failed: {exc}")
         except Exception:
-            # Keep retrying rather than giving up for good. Some failures here
-            # are transient without being connection errors -- two instances
-            # racing the same seed, for one -- and abandoning the loop left the
-            # schema permanently incomplete with no way back but a restart.
+            # Continue to retry. Some faults are temporary but are not
+            # connection errors.
             print(f"Schema bootstrap attempt {attempt}/{limit} failed unexpectedly")
             print(traceback.format_exc())
         time.sleep(delay)
@@ -278,16 +253,9 @@ def _bootstrap_loop(limit=DB_BOOTSTRAP_ATTEMPTS):
 
 def init_db(wait=DB_STARTUP_WAIT):
     """
-    Ensure the database and tables exist. Returns True if the schema is ready.
-
-    Never raises, and never blocks longer than *wait* seconds. The work runs on
-    a background thread that we simply wait on: when the database is up it
-    finishes in milliseconds, so startup is effectively synchronous and tests
-    stay deterministic. When the database is down we stop waiting and let Flask
-    start serving, so ``/health`` can report the outage within seconds instead
-    of the process sitting unresponsive for a minute -- and the thread keeps
-    retrying, so the schema lands as soon as the database comes back, with no
-    restart or redeploy.
+    Make the database and tables if they do not exist. Return True when the
+    schema is ready. Never raise, and never wait more than *wait* seconds. A
+    background thread continues the work.
     """
     global _bootstrap_thread
 

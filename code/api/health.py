@@ -8,14 +8,9 @@ health_bp = Blueprint("health", __name__)
 @health_bp.route("/health", methods=["GET"])
 def health():
     """
-    Report the state of the app and the database.
-
-    The probe uses the same pool as the other endpoints. A separate connection
-    can report a different state than the API sees.
-
-    The probe is SELECT 1 and uses no table. It passes when the schema does not
-    exist, but then each data endpoint fails. The status code also uses the
-    schema state.
+    Report the state of the app and the database. The probe uses the same pool
+    as the other endpoints. It also checks the schema, because SELECT 1 passes
+    without one.
     """
     status = {
         "message": "Hello World",

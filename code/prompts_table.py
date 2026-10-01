@@ -61,9 +61,8 @@ def check_and_insert_default_prompts(sync_connection):
             else:
                 text_to_insert = text
 
-            # ON CONFLICT so a second bootstrap racing this one cannot raise
-            # a unique violation. The COUNT check above is not a lock: two
-            # processes can both see an empty table and both insert.
+            # ON CONFLICT: the COUNT above is not a lock. Two processes can
+            # both read an empty table and both insert.
             cur.execute("""
                 INSERT INTO prompts (domain, agent_type, type, text)
                 VALUES (%s, %s, %s, %s)

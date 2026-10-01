@@ -3,18 +3,11 @@ from db_pool import with_connection
 
 @with_connection
 def update_contact_info(conn, session_id: str, name: str = None, email: str = None, mobile: str = None, country: str = None):
-    """
-    Update contact details (name, email, mobile, country) for a session in chat_info.
-
-    Runs on a pooled connection: it is committed on success and rolled back on
-    failure by the caller, so no manual rollback is needed to clear a poisoned
-    transaction from an earlier request.
-    """
+    """Update the contact details for a session in chat_info."""
     try:
         with conn.cursor() as cur:
-            # The column is contact_name, not name. It read "name" before, so
-            # this statement always failed with UndefinedColumn and the endpoint
-            # could never succeed.
+            # The column is contact_name. It read "name" before, so this
+            # statement always failed.
             update_query = """
                 UPDATE chat_info
                 SET

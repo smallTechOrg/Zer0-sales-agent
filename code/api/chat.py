@@ -17,8 +17,7 @@ chat_bp = Blueprint("chat", __name__)
 # It receives a JSON request containing the user's chat input from the frontend, validates the input, sends the validated input to the LLM, and returns a JSON response.
 @chat_bp.route('/chat', methods=['POST'])
 def chat_api():
-    # Validation uses the database, so it stays in the try block. The client
-    # then gets the same error shape for all faults.
+    # Validation uses the database. Keep it in the try block.
     try:
         chat_validation_response = chat_api_validate(request)
         if not chat_validation_response.is_valid:

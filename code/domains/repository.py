@@ -1,13 +1,6 @@
 """
-Data Access Layer for the Domains resource.
-
-All SQL lives here.  Nothing outside this module touches the database directly.
-
-Each method borrows a connection from the shared pool for the duration of that
-one query and returns it.  The repository holds no connection of its own: a
-long-lived one would be dropped by a database restart and every later call
-would fail.  Tests replace the whole repository with a double (see
-``test_domains_service.py``), so nothing needs to be injected here.
+Data access for the Domains resource. All SQL is here. Each method takes a
+connection from the pool for one query. The repository keeps no connection.
 """
 from __future__ import annotations
 
@@ -80,12 +73,8 @@ class DomainRepository:
         parent_id: Optional[int] = None,
     ) -> dict:
         """
-        Insert a new domain row and return the persisted record.
-
-        Raises ``psycopg.errors.UniqueViolation`` if *address* already exists
-        (the caller is responsible for handling or re-raising this).  A unique
-        violation is not a connection failure, so it is not retried; the
-        connection context rolls it back and re-raises.
+        Add a domain row and return it. Raise UniqueViolation if the address
+        exists. A unique violation is not retried.
         """
 
         def insert(conn):

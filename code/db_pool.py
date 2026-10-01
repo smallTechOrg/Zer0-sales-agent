@@ -1,15 +1,7 @@
 """
-Shared PostgreSQL connection pool.
-
-All database access uses this pool, including /health. A separate connection in
-the health check can report a different state than the API sees.
-
-The pool replaces one module-level connection. That connection had two faults:
-a database restart killed it and nothing made a new one, and all Flask threads
-used it together.
-
-The pool tests each connection before it gives it to a caller, replaces old
-connections, and retries when the database is not available.
+Shared PostgreSQL connection pool. All database access uses it, including
+/health. The pool tests each connection before use, replaces old connections,
+and retries when the database is not available.
 """
 from __future__ import annotations
 
@@ -161,13 +153,7 @@ def close_pool() -> None:
 
 
 def _close_pool_at_exit() -> None:
-    """
-    Release connections on the way out.
-
-    Deliberately silent: at interpreter shutdown the log stream may already be
-    closed, and a logging failure here would print a traceback over whatever
-    the process was actually reporting.
-    """
+    """Release the connections. Silent: the output stream can be closed."""
     pool = _take_pool()
     if pool is not None:
         pool.close()
@@ -175,15 +161,8 @@ def _close_pool_at_exit() -> None:
 
 def _handle_sigterm(signum, frame):
     """
-    Close the pool when the deploy script stops the app.
-
-    deploy.sh stops the old process with `kill`, and Python's default SIGTERM
-    disposition terminates the process outright -- atexit handlers never run,
-    so the connections would be left for the server to reap. On a shared
-    instance it is worth handing them back deliberately.
-
-    SIGINT needs no handler: it raises KeyboardInterrupt, the interpreter shuts
-    down normally, and atexit runs.
+    Close the pool when deploy.sh stops the app. Python does not run atexit
+    handlers on SIGTERM. SIGINT needs no handler.
     """
     _close_pool_at_exit()
     raise SystemExit(128 + signum)
@@ -287,16 +266,9 @@ def get_connection(
     timeout: Optional[float] = None,
 ) -> Iterator[psycopg.Connection]:
     """
-    Borrow a validated connection from the pool for one unit of work.
-
-    Commits on a clean exit, rolls back on an exception, and always returns the
-    connection to the pool. Only the *acquisition* is retried here: once the
-    caller body has started running we cannot safely re-run it, so use
-    :func:`run_with_retry` when the whole operation should be retried.
-
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
+    Take one connection from the pool. Commit on success, roll back on an
+    error, then return the connection. This retries only the request for a
+    connection. Use run_with_retry to retry the operation.
     """
     pool = get_pool()
     with _track_borrow_depth():
@@ -329,15 +301,8 @@ def run_with_retry(
     label: Optional[str] = None,
 ) -> T:
     """
-    Run ``operation(conn)`` on a pooled connection, retrying the whole
-    operation on a fresh connection when the connection itself fails.
-
-    This is what recovers from a database restart mid-request: the first
-    statement raises, the dead connection is dropped, and the operation runs
-    again on a new one.
-
-    ``operation`` must be safe to run twice. Every caller in this codebase is
-    a read or an idempotent upsert.
+    Run operation(conn) on a pooled connection. Retry on a new connection if
+    the connection fails. operation must be safe to run two times.
     """
     attempts = DB_RETRY_ATTEMPTS if attempts is None else attempts
     what = label or getattr(operation, "__name__", "database operation")
@@ -369,16 +334,9 @@ def run_with_retry(
 
 def with_connection(fn: Callable[..., T]) -> Callable[..., T]:
     """
-    Give a function a pooled connection as its first argument, with retry.
-
-        @with_connection
-        def get_rows(conn, limit):
-            ...
-
-        get_rows(10)   # the connection is supplied by the decorator
-
-    For methods, call :func:`run_with_retry` directly: this decorator would
-    hand the connection in ahead of ``self``.
+    Give a function a pooled connection as the first argument, with retry. For
+    a method, use run_with_retry: this decorator puts the connection before
+    self.
     """
 
     @functools.wraps(fn)
@@ -397,11 +355,8 @@ def with_connection(fn: Callable[..., T]) -> Callable[..., T]:
 
 def ping() -> None:
     """
-    Verify the database over a pooled connection. Raises on failure.
-
-    Uses the same pool the rest of the API uses, so a green health check means
-    the chat endpoints can reach the database too. One attempt and a short
-    timeout keep the probe fast.
+    Test the database through the pool. Raise on failure. One attempt and a
+    short timeout keep the probe fast.
     """
 
     def _select_one(conn: psycopg.Connection) -> None:

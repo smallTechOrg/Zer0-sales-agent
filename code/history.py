@@ -16,14 +16,9 @@ _UNBOUND = object()
 
 class PooledChatMessageHistory(PostgresChatMessageHistory):
     """
-    Chat history that takes a connection from the pool for each operation.
-
-    The parent class keeps one connection for the life of the object. A pool
-    cannot work that way. Each method here takes a connection, runs the parent
-    SQL, then returns the connection.
-
-    get_session_history makes a new object for each request, so the threads do
-    not share _connection.
+    Chat history that takes a connection from the pool for each operation. The
+    parent class keeps one connection for the life of the object, which a pool
+    cannot do.
     """
 
     def __init__(self, table: str, session_id: str) -> None:
@@ -31,12 +26,8 @@ class PooledChatMessageHistory(PostgresChatMessageHistory):
 
     def _run(self, operation, label):
         """
-        Run one parent operation on a pooled connection. Retry if the
-        connection fails during the operation.
-
-        add_messages also retries. A retry can write a message two times if the
-        insert completed but the answer did not arrive. A repeated line is
-        better than a chat window that does not open.
+        Run one parent operation on a pooled connection, with retry. A retry
+        can write a message two times, which is better than a failed request.
         """
         def with_connection(conn):
             self._connection = conn
