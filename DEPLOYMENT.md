@@ -204,9 +204,21 @@ sudo kill -9 <PID>                            # only if it ignores SIGTERM
 cd /opt/ai-agent-boilerplate && ./scripts/deploy.sh
 ```
 
-A stale `zero.pid` is worth knowing about: after a reboot the recorded PID can
-belong to an unrelated process, and `deploy.sh` runs as root. Check it matches
-a Flask process before trusting it.
+`zero.pid` is in `.gitignore` on purpose, not for tidiness: `update_app.sh`
+runs `git clean -fd` before `deploy.sh`, which deletes untracked files. If the
+PID file went with them, nothing would be stopped, the new process could not
+bind port 5000, and the old code would keep serving while the deploy reported
+success.
+
+A stale `zero.pid` is the one case to watch. After a reboot the recorded PID
+can belong to an unrelated process, and `deploy.sh` runs as root, so there is
+no permission check to stop the kill. If the app has just restarted and
+something else on the box died at the same time, check this first:
+
+```bash
+cat /opt/ai-agent-boilerplate/code/zero.pid
+ps -p "$(cat /opt/ai-agent-boilerplate/code/zero.pid)" -o pid=,args=
+```
 
 ### Complete Debugging Checklist
 
