@@ -34,18 +34,21 @@ from config import DATABASE_URL  # noqa: E402
 
 def kill_app_connections() -> int:
     """
-    Terminate every backend this app holds.
+    Terminate the backends this app holds in the database under test.
 
-    This is exactly what a PostgreSQL restart does to open connections, without
-    needing to restart the server.
+    pg_stat_activity covers the whole instance, and prod_chat_db and
+    staging_chat_db share one. application_name is the same in both, because
+    nothing sets DB_APPLICATION_NAME, so a filter on it alone reaches the other
+    database. datname keeps this inside the database the tests point at.
     """
     admin_url = DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
     with psycopg.connect(admin_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE application_name = %s AND pid <> pg_backend_pid();",
-                (config.DB_APPLICATION_NAME,),
+                "WHERE application_name = %s AND datname = %s "
+                "AND pid <> pg_backend_pid();",
+                (config.DB_APPLICATION_NAME, config.db_name),
             )
             return len(cur.fetchall())
 
