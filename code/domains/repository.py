@@ -74,7 +74,11 @@ class DomainRepository:
     ) -> dict:
         """
         Add a domain row and return it. Raise UniqueViolation if the address
-        exists. A unique violation is not retried.
+        exists.
+
+        attempts=1: a COMMIT that fails has an unknown result, because the
+        server can apply it and then lose the connection. A retry would insert
+        the row a second time and fail on the unique address.
         """
 
         def insert(conn):
@@ -87,7 +91,9 @@ class DomainRepository:
                 )
                 return cur.fetchone()
 
-        return self._to_dict(run_with_retry(insert, label="DomainRepository.create"))
+        return self._to_dict(
+            run_with_retry(insert, attempts=1, label="DomainRepository.create")
+        )
 
     # ------------------------------------------------------------------
     # Helpers
