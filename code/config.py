@@ -128,7 +128,7 @@ DB_APPLICATION_NAME = os.getenv("DB_APPLICATION_NAME", "zero-sales-agent")
 
 # Seconds that startup waits for the schema, then the number of retries.
 DB_STARTUP_WAIT = float(os.getenv("DB_STARTUP_WAIT", "5"))
-DB_BOOTSTRAP_ATTEMPTS = int(os.getenv("DB_BOOTSTRAP_ATTEMPTS", "60"))
+DB_BOOTSTRAP_ATTEMPTS = int(os.getenv("DB_BOOTSTRAP_ATTEMPTS", "600"))
 
 
 class agent_type(str, Enum):
