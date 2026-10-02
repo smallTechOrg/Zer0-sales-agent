@@ -18,6 +18,33 @@ _bootstrap_lock = threading.Lock()
 _bootstrap_thread = None
 
 
+# The tables every request needs. /health asks the database for these, instead
+# of trusting what the bootstrap thread did, so it also sees a table that was
+# dropped later.
+REQUIRED_TABLES = ("chat_info", "prompts", "domains")
+
+
+def missing_tables():
+    """
+    Return the required tables that do not exist. Raise if the database is
+    unreachable. One catalog query answers both questions.
+    """
+    wanted = list(REQUIRED_TABLES) + [config.table_name]
+
+    def check(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT t FROM unnest(%s::text[]) AS t "
+                "WHERE to_regclass('public.' || t) IS NULL;",
+                (wanted,),
+            )
+            return [r[0] for r in cur.fetchall()]
+
+    return run_with_retry(
+        check, attempts=1, timeout=config.DB_HEALTH_TIMEOUT, label="schema check"
+    )
+
+
 def ensure_database_exists(database_url=config.DATABASE_URL, database=config.db_name):
     """
     Connect to the 'postgres' system database and create *database* if missing.

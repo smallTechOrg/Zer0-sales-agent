@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify
 
-from db_pool import ping, pool_status
+from db import missing_tables
+from db_pool import pool_status
 
 health_bp = Blueprint("health", __name__)
 
@@ -9,7 +10,8 @@ health_bp = Blueprint("health", __name__)
 def health():
     """
     Report the state of the app and the database. The probe uses the same pool
-    as the other endpoints.
+    as the other endpoints, and asks for the tables the API needs. SELECT 1
+    alone passes on a database with no schema, while every data endpoint fails.
     """
     status = {
         "message": "Hello World",
@@ -17,9 +19,12 @@ def health():
     }
 
     try:
-        ping()
+        absent = missing_tables()
         status["database"] = "connected"
         status["pool"] = pool_status()
+        if absent:
+            status["schema_error"] = f"missing tables: {', '.join(absent)}"
+            return jsonify(status), 503
     except Exception as e:
         status["database_error"] = str(e)
         try:

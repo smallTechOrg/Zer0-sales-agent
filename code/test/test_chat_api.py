@@ -133,6 +133,30 @@ class TestMalformedRequests:
 
 
 # ---------------------------------------------------------------------------
+# /health
+# ---------------------------------------------------------------------------
+
+class TestHealthSeesTheSchema:
+    """
+    SELECT 1 touches no table, so it passes against a database with no schema
+    while every data endpoint returns 500. The probe asks for the tables.
+    """
+
+    def test_a_missing_table_is_a_503(self, client):
+        with patch("api.health.missing_tables", return_value=["prompts"]):
+            response = client.get("/health")
+        assert response.status_code == 503
+        body = response.get_json()
+        assert body["database"] == "connected"
+        assert "prompts" in body["schema_error"]
+
+    def test_a_complete_schema_is_a_200(self, client):
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert "schema_error" not in response.get_json()
+
+
+# ---------------------------------------------------------------------------
 # Behaviour when the database is unavailable
 # ---------------------------------------------------------------------------
 
