@@ -112,10 +112,11 @@ goes through a connection pool that validates connections before use and
 retries on failure, so the API recovers on its own within a few seconds. If it
 does not, the database is still unreachable - check the server, not the app.
 
-The pool tests each connection as it hands it out, so a connection the restart
-closed is replaced on the next use. The uptime check on `/health` runs through
-the pool too, so the connections are normally replaced by a probe before a real
-request arrives.
+The pool tests each connection as it hands it out, so the `/health` probe
+already replaces what a restart closed - it goes through the pool like any
+other request. A background thread also calls the pool's `check()` every
+`DB_CHECK_INTERVAL` seconds, as a backstop for when no probe is running. At
+300s it costs about 576 empty statements a day.
 
 **The app also starts when the database is down.** Startup waits
 `DB_STARTUP_WAIT` seconds for the schema, then serves regardless, so `/health`
@@ -157,6 +158,7 @@ declared in `code/config.py` with its default; `.env` carries values only. See
 | `DB_POOL_MAX_IDLE` | 300 | Recycle connections idle this long |
 | `DB_POOL_MAX_LIFETIME` | 3600 | Recycle connections older than this |
 | `DB_HEALTH_TIMEOUT` | 5 | Budget for the `/health` probe |
+| `DB_CHECK_INTERVAL` | 300 | Seconds between pool checks; 0 disables them |
 | `DB_STARTUP_WAIT` | 5 | Seconds startup waits for the schema before serving anyway |
 | `DB_STATEMENT_TIMEOUT_MS` | 10000 | Ceiling on one query, so an overloaded DB cannot park a request |
 | `DB_LOCK_TIMEOUT_MS` | 3000 | Fail fast when another process holds a lock |
