@@ -88,7 +88,15 @@ class DomainService:
         """
         address = self.extract_address(website_url)
 
-        if self._repo.find_by_address(address) is not None:
+        existing = self._repo.find_by_address(address)
+        if existing is not None:
+            # The two rows are written in two transactions. An earlier call can
+            # have written this one and stopped before the www variant, which
+            # then no request can reach. Finish it here, so a retry repairs the
+            # registration instead of failing on the address that exists.
+            self._ensure_www(
+                address, existing.get("key"), existing.get("parent_id")
+            )
             raise DomainAlreadyExistsError(
                 f"A domain for '{address}' already exists."
             )
@@ -101,11 +109,9 @@ class DomainService:
         resolved_key = self._resolve_key(key, address)
         domain = self._repo.create(key=resolved_key, address=address, parent_id=parent_id)
 
-        # Auto-create the www. variant so both bare and www hostnames are registered,
-        # sharing the same key so lookups always return the same key regardless of prefix.
-        www_address = f"www.{address}"
-        if self._repo.find_by_address(www_address) is None:
-            self._repo.create(key=resolved_key, address=www_address, parent_id=parent_id)
+        # Register the www variant too, under the same key, so a lookup gives
+        # the same key with or without the prefix.
+        self._ensure_www(address, resolved_key, parent_id)
 
         return domain
 
@@ -120,6 +126,12 @@ class DomainService:
     # ------------------------------------------------------------------
     # Static helpers – kept on the class so tests can call them directly.
     # ------------------------------------------------------------------
+
+    def _ensure_www(self, address: str, key: str, parent_id: Optional[int]) -> None:
+        """Add the www variant of *address* if it is not there yet."""
+        www_address = f"www.{address}"
+        if self._repo.find_by_address(www_address) is None:
+            self._repo.create(key=key, address=www_address, parent_id=parent_id)
 
     @staticmethod
     def extract_address(website_url: str) -> str:

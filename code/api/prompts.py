@@ -10,8 +10,11 @@ prompt_bp = Blueprint("prompts", __name__)
 # --- New Prompt APIs ---
 @prompt_bp.route('/prompts', methods=['GET'])
 def get_prompts():
-    prompts = get_all_prompts()
-    return jsonify({"prompts": prompts}), 200
+    try:
+        return jsonify({"prompts": get_all_prompts()}), 200
+    except Exception:
+        print(traceback.format_exc())
+        return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)
 
 @prompt_bp.route('/prompt', methods=['POST'])
 def create_or_update_prompt():

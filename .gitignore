@@ -13,3 +13,6 @@ venv/
 .envrc
 # For macOS
 .DS_Store
+# Flask runtime files written by scripts/deploy.sh
+zero.pid
+flask.log
