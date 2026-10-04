@@ -1,6 +1,6 @@
 import pytest
 from app import app
-from db import sync_connection
+from db_pool import get_connection
 
 @pytest.fixture
 def client():
@@ -12,9 +12,9 @@ def client():
 def cleanup_prompts():
     # Cleanup any test prompts before and after each test
     yield
-    with sync_connection.cursor() as cur:
-        cur.execute("DELETE FROM prompts WHERE domain='testdomain' AND agent_type='testagent';")
-        sync_connection.commit()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM prompts WHERE domain='testdomain' AND agent_type='testagent';")
 
 def test_get_prompts(client):
     response = client.get('/prompts')

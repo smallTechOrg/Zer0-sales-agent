@@ -1,15 +1,12 @@
 """
-Data Access Layer for the Domains resource.
-
-All SQL lives here.  Nothing outside this module touches the database directly.
-The class accepts a connection as a constructor argument, which makes it trivial
-to swap in a test double without patching globals.
+Data access for the Domains resource. All SQL is here. Each method takes a
+connection from the pool for one query. The repository keeps no connection.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-import psycopg
+from db_pool import run_with_retry
 
 
 class DomainRepository:
@@ -18,44 +15,52 @@ class DomainRepository:
     # Column order returned by every SELECT / RETURNING clause.
     _COLUMNS = ("id", "key", "address", "parent_id", "created_at")
 
-    def __init__(self, connection: psycopg.Connection) -> None:
-        self._conn = connection
-
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
 
     def find_by_address(self, address: str) -> Optional[dict]:
         """Return the domain record matching *address*, or ``None``."""
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, key, address, parent, created_at "
-                "FROM domains WHERE address = %s;",
-                (address,),
-            )
-            row = cur.fetchone()
+
+        def query(conn):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, key, address, parent, created_at "
+                    "FROM domains WHERE address = %s;",
+                    (address,),
+                )
+                return cur.fetchone()
+
+        row = run_with_retry(query, label="DomainRepository.find_by_address")
         return self._to_dict(row) if row else None
 
     def find_by_id(self, domain_id: int) -> Optional[dict]:
         """Return the domain record with the given primary key, or ``None``."""
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, key, address, parent, created_at "
-                "FROM domains WHERE id = %s;",
-                (domain_id,),
-            )
-            row = cur.fetchone()
+
+        def query(conn):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, key, address, parent, created_at "
+                    "FROM domains WHERE id = %s;",
+                    (domain_id,),
+                )
+                return cur.fetchone()
+
+        row = run_with_retry(query, label="DomainRepository.find_by_id")
         return self._to_dict(row) if row else None
 
     def list_all(self) -> list[dict]:
         """Return all domain records ordered by creation time."""
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, key, address, parent, created_at "
-                "FROM domains ORDER BY created_at ASC;"
-            )
-            rows = cur.fetchall()
-        return [self._to_dict(row) for row in rows]
+
+        def query(conn):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, key, address, parent, created_at "
+                    "FROM domains ORDER BY created_at ASC;"
+                )
+                return cur.fetchall()
+
+        return [self._to_dict(row) for row in run_with_retry(query, label="DomainRepository.list_all")]
 
     # ------------------------------------------------------------------
     # Mutations
@@ -68,25 +73,27 @@ class DomainRepository:
         parent_id: Optional[int] = None,
     ) -> dict:
         """
-        Insert a new domain row and return the persisted record.
+        Add a domain row and return it. Raise UniqueViolation if the address
+        exists.
 
-        Raises ``psycopg.errors.UniqueViolation`` if *address* already exists
-        (the caller is responsible for handling or re-raising this).
+        attempts=1: a COMMIT that fails has an unknown result, because the
+        server can apply it and then lose the connection. A retry would insert
+        the row a second time and fail on the unique address.
         """
-        try:
-            with self._conn.cursor() as cur:
+
+        def insert(conn):
+            with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO domains (key, address, parent) "
                     "VALUES (%s, %s, %s) "
                     "RETURNING id, key, address, parent, created_at;",
                     (key, address, parent_id),
                 )
-                row = cur.fetchone()
-            self._conn.commit()
-            return self._to_dict(row)
-        except Exception:
-            self._conn.rollback()
-            raise
+                return cur.fetchone()
+
+        return self._to_dict(
+            run_with_retry(insert, attempts=1, label="DomainRepository.create")
+        )
 
     # ------------------------------------------------------------------
     # Helpers

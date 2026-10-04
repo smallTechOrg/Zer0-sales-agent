@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 from api.models import ValidationResponse
 from config import max_input_length, agent_type , status_type
 import uuid
-from db import sync_connection
+from db_pool import with_connection
 
 def chat_api_validate(request) -> ValidationResponse:
     chat_input_validation_response = validate_chat_user_input(request)
@@ -96,19 +96,22 @@ def validate_session_id(request):
 
     
 def validate_address(request):
-    address = get_request_address(request)
     """Checks whether the given address exists. Returns (is_valid, domain or message)."""
-    sync_connection.rollback()
-    
-    with sync_connection.cursor() as cur:
-        cur.execute("SELECT key FROM domains WHERE address = %s;", (address,))
-        row = cur.fetchone()
+    address = get_request_address(request)
+    row = _find_domain_key(address)
 
-        if not row:
-            return ValidationResponse(False, "Incorrect Address")
-        
-        return ValidationResponse(True, "",row[0])
-    
+    if not row:
+        return ValidationResponse(False, "Incorrect Address")
+
+    return ValidationResponse(True, "", row[0])
+
+
+@with_connection
+def _find_domain_key(conn, address):
+    with conn.cursor() as cur:
+        cur.execute("SELECT key FROM domains WHERE address = %s;", (address,))
+        return cur.fetchone()
+
 
 def get_request_address(request):
     origin = request.args.get("origin")
