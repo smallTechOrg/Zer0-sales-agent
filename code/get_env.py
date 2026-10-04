@@ -27,7 +27,7 @@ def generate_env_file(secrets: dict, env_path: str = ".env"):
 
         env_content = f"""DEBUG=True
 GROQ_API_KEY={secrets['GROQ_API_KEY']}
-GROQ_MODEL_NAME=meta-llama/llama-4-scout-17b-16e-instruct
+GROQ_MODEL_NAME=openai/gpt-oss-120b
 
 # PostgreSQL Database Configuration
 DATABASE_URL={secrets['POSTGRES_URL']}
