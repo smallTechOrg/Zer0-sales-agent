@@ -4,7 +4,8 @@ from flask_smorest import Api
 
 from api import register_blueprints
 from api.domains import domains_bp
-from config import DEBUG
+from config import DEBUG, PORT
+from db import init_db
 
 # ---------------------------------------------------------------------------
 # Application factory
@@ -12,6 +13,13 @@ from config import DEBUG
 
 def create_app() -> Flask:
     flask_app = Flask(__name__)
+
+    # -- Database ------------------------------------------------------------
+    # init_db never raises: if PostgreSQL is down the app still starts, /health
+    # reports it, and a background thread creates the schema once the database
+    # comes back. Previously an unreachable database at import time killed the
+    # process, so even the health check was unreachable.
+    init_db()
 
     # -- flask-smorest / OpenAPI configuration ---------------------------------
     # Auto-generated spec is served at /api/openapi.json.
@@ -44,4 +52,4 @@ def chat_ui():
     return render_template('chat.html')
 
 if __name__ == "__main__":
-    app.run(debug=DEBUG, port=5001)
+    app.run(debug=DEBUG, port=PORT)
