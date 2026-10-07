@@ -34,6 +34,26 @@ max_input_length = int(os.getenv("MAX_INPUT_LENGTH", "10000"))
 DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "COMMON")
 
 # ---------------------------------------------------------------------------
+# Slack (daily summary)
+# ---------------------------------------------------------------------------
+# Incoming webhook for the channel that receives the daily chat summary.
+# Unset: the summary job runs and saves to the database, and skips Slack.
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+# Seconds to wait for one webhook POST.
+SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
+
+# ---------------------------------------------------------------------------
+# Scheduler (see code/scheduler.py)
+# ---------------------------------------------------------------------------
+# The daily summary job runs inside the Flask process on this interval.
+DAILY_SUMMARY_ENABLED = os.getenv("DAILY_SUMMARY_ENABLED", "True").lower() == "true"
+DAILY_SUMMARY_INTERVAL_MINUTES = int(os.getenv("DAILY_SUMMARY_INTERVAL_MINUTES", "3"))
+
+# Werkzeug sets this in the process that serves requests when its reloader is
+# on. The other process only watches files and must not run the scheduler.
+WERKZEUG_RUN_MAIN = os.getenv("WERKZEUG_RUN_MAIN") == "true"
+
+# ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
 db_name = 'chatdb'
@@ -129,6 +149,14 @@ DB_APPLICATION_NAME = os.getenv("DB_APPLICATION_NAME", "zero-sales-agent")
 # Seconds that startup waits for the schema, then the number of retries.
 DB_STARTUP_WAIT = float(os.getenv("DB_STARTUP_WAIT", "5"))
 DB_BOOTSTRAP_ATTEMPTS = int(os.getenv("DB_BOOTSTRAP_ATTEMPTS", "600"))
+
+# ---------------------------------------------------------------------------
+# Scheduler (APScheduler, runs inside the Flask process)
+# ---------------------------------------------------------------------------
+SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "True").lower() == "true"
+SCHEDULER_TIMEZONE = os.getenv("SCHEDULER_TIMEZONE", "Asia/Kolkata")
+STALE_SESSION_HOURS = int(os.getenv("STALE_SESSION_HOURS", "24"))
+
 
 
 class agent_type(str, Enum):

@@ -1,0 +1,14 @@
+You are summarising a chat between a website visitor and a sales assistant for an internal daily report.
+
+Conversation:
+{conversation}
+
+Write a short summary for the sales team. Cover:
+1. What the visitor wanted or asked about
+2. Any contact details or company details they shared
+3. Where the conversation ended and the suggested next step
+
+Rules:
+- Plain text, at most 5 sentences, no markdown
+- Only state what is in the conversation; do not guess
+- If the visitor never wrote anything, say so in one sentence
