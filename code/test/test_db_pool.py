@@ -14,7 +14,6 @@ Like the other tests in this project, these need a live database.
 import sys
 import os
 import threading
-import time
 import uuid
 from unittest.mock import patch
 
@@ -221,32 +220,28 @@ class TestSlowDatabase:
 
 class TestPoolCheck:
     """
-    A restart closes every connection. The pool does not find out until the
-    next request, so a timer calls check() and refills it first.
+    A restart closes every connection. Nothing polls the pool on a timer: the
+    pool tests each connection as it is handed out and replaces a dead one.
     """
 
-    def test_a_checker_thread_runs(self):
+    def test_no_background_thread_polls_the_pool(self):
         db_pool.get_pool()
         names = [t.name for t in threading.enumerate()]
-        assert "db-pool-check" in names
+        assert "db-pool-check" not in names
 
-    def test_check_replaces_the_closed_connections(self):
+    def test_checkout_replaces_the_closed_connections(self):
         pool = db_pool.get_pool()
         db_pool.ping()
         # get_stats omits a counter that is still zero.
         before = pool.get_stats().get("connections_lost", 0)
 
         kill_app_connections()
-        pool.check()
 
-        for _ in range(50):
-            if pool.get_stats()["pool_size"] >= config.DB_POOL_MIN_SIZE:
-                break
-            time.sleep(0.1)
+        # No timer ran. The next borrow has to notice and reconnect by itself.
+        db_pool.ping()
 
         assert pool.get_stats().get("connections_lost", 0) > before
-        assert pool.get_stats()["pool_size"] >= config.DB_POOL_MIN_SIZE
-        db_pool.ping()
+        assert pool.get_stats()["pool_size"] >= 1
 
 
 # ---------------------------------------------------------------------------
