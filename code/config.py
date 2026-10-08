@@ -20,6 +20,10 @@ DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 # sets the port itself.
 PORT = int(os.getenv("PORT", "5001"))
 
+# Set by Werkzeug in the process that serves requests when the debug reloader
+# is on. The watcher parent does not have it. See the __main__ block in app.py.
+WERKZEUG_RUN_MAIN = os.getenv("WERKZEUG_RUN_MAIN") == "true"
+
 # ---------------------------------------------------------------------------
 # LLM (Groq)
 # ---------------------------------------------------------------------------
@@ -43,6 +47,10 @@ SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
 # The Slack message header links here.
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zero.smalltech.in/dashboard?h=khuljasimsim")
+# How many days back the summary job looks for sessions without a summary.
+# Only a cap on retries: a session is summarised once and then left alone, so
+# the first run after a long outage does not go through the whole history.
+SUMMARY_WINDOW_DAYS = int(os.getenv("SUMMARY_WINDOW_DAYS", "7"))
 
 # ---------------------------------------------------------------------------
 # Scheduler (see code/scheduler.py)

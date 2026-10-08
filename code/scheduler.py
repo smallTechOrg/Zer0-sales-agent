@@ -38,6 +38,7 @@ def run_daily_summary_job() -> None:
         print(
             f"[SCHEDULER] daily summary job finished: "
             f"{result['summarised_count']}/{result['session_count']} session(s) summarised, "
+            f"{result.get('resent_count', 0)} resent, "
             f"slack={result.get('slack')}"
         )
     except Exception as exc:

@@ -4,10 +4,12 @@ with a stub so the tests need no Groq key and are deterministic.
 
 find_sessions() must see a session that just wrote a message and still has
 no summary, skip one whose message is older than the window, skip one whose
-summary already reached Slack, and see again one that kept talking after its
-summary was written. find_conversation() must return the whole session.
-save_summary() must write to chat_info and return the lead row.
-daily_summary() must run the chain, keep going when one session fails, and
+summary already reached Slack, see again one that kept talking after its
+summary was written, and leave one whose summary is saved but unsent to
+find_unnotified_summaries(). find_conversation() must return the whole
+session. save_summary() must write to chat_info and return the lead row.
+daily_summary() must run the chain, keep going when one session fails,
+resend a saved summary after a Slack failure without a new LLM call, and
 leave nothing behind for the next run once Slack accepted the message.
 """
 import sys
@@ -170,7 +172,7 @@ class TestFindSessions:
         assert recent in ids
         assert stale in ids
 
-    def test_skips_sent_and_keeps_continued_and_unsent(self, summarised_sessions):
+    def test_skips_sent_and_unsent_and_keeps_continued(self, summarised_sessions):
         from daily_summary import find_sessions
 
         done, continued, unsent = summarised_sessions
@@ -178,9 +180,66 @@ class TestFindSessions:
 
         assert done not in by_id
         assert continued in by_id
-        assert unsent in by_id
+        # Its summary is saved; the resend pass handles it, not the LLM.
+        assert unsent not in by_id
         # Both messages of the continued session are inside the window.
         assert by_id[continued]["message_count"] == 2
+
+    def test_returns_chat_details(self, sessions):
+        from daily_summary import find_sessions
+
+        recent, _ = sessions
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO chat_info (session_id, contact_name, email, domain) "
+                    "VALUES (%s, %s, %s, %s);",
+                    (recent, "Ada", "ada@example.com", config.DEFAULT_DOMAIN),
+                )
+
+        row = {r["session_id"]: r for r in find_sessions()}[recent]
+        assert row["name"] == "Ada"
+        assert row["email"] == "ada@example.com"
+        assert row["domain"] == config.DEFAULT_DOMAIN
+        assert row["status"] == "OPEN"
+        assert row["created_at"] is not None
+
+    def test_details_are_empty_without_chat_info_row(self, sessions):
+        from daily_summary import find_sessions
+
+        recent, _ = sessions
+        row = {r["session_id"]: r for r in find_sessions()}[recent]
+        assert row["name"] == ""
+        assert row["email"] == ""
+        assert row["domain"] is None
+        assert row["created_at"] is None
+
+
+class TestFindUnnotifiedSummaries:
+    def test_returns_only_saved_but_unsent(self, summarised_sessions):
+        from daily_summary import find_unnotified_summaries
+
+        done, continued, unsent = summarised_sessions
+        by_id = {row["session_id"]: row for row in find_unnotified_summaries()}
+
+        assert unsent in by_id
+        assert done not in by_id
+        assert continued not in by_id
+        row = by_id[unsent]
+        assert row["summary"] == "old summary"
+        assert row["summary_generated_at"] is not None
+        assert row["first_message"] is not None
+        assert row["name"] == ""
+        assert row["status"] == "OPEN"
+
+    def test_row_without_summary_is_not_returned(self, sessions):
+        from daily_summary import find_unnotified_summaries
+
+        recent, _ = sessions
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO chat_info (session_id) VALUES (%s);", (recent,))
+        assert recent not in {r["session_id"] for r in find_unnotified_summaries()}
 
 
 class TestFindConversation:
@@ -328,7 +387,7 @@ class TestDailySummary:
         assert fake_slack[0]["sessions"] is result["sessions"]
 
         assert result["run_at"] is not None
-        assert result["session_count"] == len(result["sessions"])
+        assert result["session_count"] + result["resent_count"] == len(result["sessions"])
         assert result["summarised_count"] >= 1
 
         by_id = {s["session_id"]: s for s in result["sessions"]}
@@ -493,6 +552,41 @@ class TestLlmErrorText:
         row = _chat_info_row(sessions[0])
         assert row["summary"] == "Visitor asked about pricing."
         assert row["summary_notified_at"] is None
+
+    def test_unsent_summary_is_resent_without_llm(self, sessions, fake_llm, fake_slack, monkeypatch):
+        import daily_summary
+
+        recent, _ = sessions
+
+        def boom(result):
+            raise RuntimeError("webhook 500")
+
+        monkeypatch.setattr(daily_summary, "send_summaries_to_slack", boom)
+        first = daily_summary.daily_summary()
+        assert first["resent_count"] == 0
+        assert _chat_info_row(recent)["summary_notified_at"] is None
+        llm_calls = len(fake_llm)
+
+        # Slack is back. The saved summary goes out; the LLM is not asked again.
+        monkeypatch.setattr(daily_summary, "send_summaries_to_slack",
+                            lambda result: fake_slack.append(result) or {"sent": 1})
+        second = daily_summary.daily_summary()
+
+        assert len(fake_llm) == llm_calls
+        # Not re-summarised by pass one: only present as a resend entry.
+        pass_one_ids = {s["session_id"] for s in second["sessions"][: second["session_count"]]}
+        assert recent not in pass_one_ids
+        assert second["resent_count"] >= 1
+        entry = {s["session_id"]: s for s in second["sessions"]}[recent]
+        assert entry["resent"] is True
+        assert entry["summary"] == "Visitor asked about pricing."
+        assert entry["lead"]["session_id"] == recent
+        assert entry["first_message"] is not None
+        # Slack saw it and it is stamped, so a third run leaves it alone.
+        assert fake_slack[-1]["sessions"] is second["sessions"]
+        assert _chat_info_row(recent)["summary_notified_at"] is not None
+        third = daily_summary.daily_summary()
+        assert recent not in {s["session_id"] for s in third["sessions"]}
 
     def test_nothing_to_send_marks_nothing(self, sessions, fake_llm, monkeypatch):
         import daily_summary
