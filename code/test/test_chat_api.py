@@ -152,7 +152,7 @@ class TestHealthReportsThePool:
 
     def test_an_unreachable_database_is_a_503(self, client):
         outage = psycopg.OperationalError("connection refused")
-        with patch("api.health.ping", side_effect=outage):
+        with patch("api.health.get_connection", side_effect=outage):
             response = client.get("/health")
         assert response.status_code == 503
         body = response.get_json()

@@ -218,6 +218,14 @@ class TestSlowDatabase:
 # Refilling the pool
 # ---------------------------------------------------------------------------
 
+def _borrow_one():
+    """Borrow a connection and run the cheapest possible statement on it."""
+    with db_pool.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+
+
 class TestPoolCheck:
     """
     A restart closes every connection. Nothing polls the pool on a timer: the
@@ -231,14 +239,14 @@ class TestPoolCheck:
 
     def test_checkout_replaces_the_closed_connections(self):
         pool = db_pool.get_pool()
-        db_pool.ping()
+        _borrow_one()
         # get_stats omits a counter that is still zero.
         before = pool.get_stats().get("connections_lost", 0)
 
         kill_app_connections()
 
         # No timer ran. The next borrow has to notice and reconnect by itself.
-        db_pool.ping()
+        _borrow_one()
 
         assert pool.get_stats().get("connections_lost", 0) > before
         assert pool.get_stats()["pool_size"] >= 1

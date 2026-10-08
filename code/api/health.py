@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify
 
-from db_pool import get_pool, ping
+import config
+from db_pool import get_connection, get_pool
 
 health_bp = Blueprint("health", __name__)
 
@@ -10,7 +11,7 @@ def health():
     """
     Report the state of the app and the database. The probe borrows from the
     same pool as every other endpoint, so a green check means the API can
-    reach the database.
+    reach the database. One attempt and a short timeout keep it fast.
 
     Schema state is not reported here. Creating and migrating tables is the
     deployment's job, not something a liveness probe should discover.
@@ -21,7 +22,10 @@ def health():
     }
 
     try:
-        ping()
+        with get_connection(attempts=1, timeout=config.DB_HEALTH_TIMEOUT) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
         status["database"] = "connected"
         code = 200
     except Exception as e:

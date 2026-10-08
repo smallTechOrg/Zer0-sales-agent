@@ -315,22 +315,3 @@ def with_connection(fn: Callable[..., T]) -> Callable[..., T]:
 
     return wrapper
 
-
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
-
-def ping() -> None:
-    """
-    Test the database through the pool. Raise on failure. One attempt and a
-    short timeout keep the probe fast.
-    """
-
-    def _select_one(conn: psycopg.Connection) -> None:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-
-    run_with_retry(
-        _select_one, attempts=1, timeout=config.DB_HEALTH_TIMEOUT, label="health check"
-    )
