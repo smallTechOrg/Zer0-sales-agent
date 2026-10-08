@@ -1,14 +1,25 @@
 """
-Daily summary of chat activity.
+Hourly summary of chat activity.
 
 find_sessions() asks the chat history table (config.table_name,
-``chat_table`` by default) for every distinct session that had at least one
-message in the last 24 hours. For each of those, find_conversation() fetches
-the whole conversation, summarise_conversation() asks the LLM for a short
-summary, and save_summary() writes it to the session's chat_info row.
-daily_summary() runs the whole chain, then posts every summary to Slack
-through slack_notify and, when that succeeds, summary_notified_at() stamps the
-rows that were sent.
+``chat_table`` by default) for every session that still needs a summary: one
+with recent messages whose chat_info row is missing, was never sent to Slack
+(summary_notified_at IS NULL), or got new messages after its summary was
+written. In a normal hour that is the conversations of the last hour. When
+an earlier run failed, at the LLM or at Slack, its sessions are still
+unstamped and are picked up again, so nothing is lost.
+
+For each of those, find_conversation() fetches the whole conversation,
+summarise_conversation() asks the LLM for a short summary, and save_summary()
+writes it to the session's chat_info row. daily_summary() runs the whole
+chain, then posts every summary to Slack through slack_notify and, when that
+succeeds, summary_notified_at() stamps the rows that were sent.
+
+A session where the visitor never wrote anything (only the agent's intro was
+shown) is "silent". It gets SILENT_SUMMARY saved without an LLM call, is left
+out of the Slack message, and is stamped as notified right away so it is not
+selected again. If the visitor comes back and writes, the new message is
+later than summary_generated_at and the session is summarised for real.
 
 chat_info keeps three columns for this:
     summary               the text of the last summary
@@ -22,6 +33,7 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import SystemMessage
 from langchain_groq import ChatGroq
@@ -34,14 +46,20 @@ from history import get_session_history
 from slack_notify import send_summaries_to_slack
 from system_prompt import get_prompt
 
-# How far back find_sessions() looks.
-SUMMARY_WINDOW = timedelta(hours=24)
+# How far back find_sessions() looks for sessions without a summary. It is
+# only a cap on retries: a session is summarised once and then left alone, so
+# the first run after a long outage does not go through the whole history.
+SUMMARY_WINDOW = timedelta(days=7)
 
 # The prompt lives in the prompts table as (DEFAULT_DOMAIN, sales,
 # daily-summary) so it can be edited through the prompts API. The file is the
 # fallback for a database that was bootstrapped before that row existed.
 SUMMARY_PROMPT_TYPE = "daily-summary"
 SUMMARY_PROMPT_FILE = Path(__file__).parent / "prompts" / "summary_prompt.txt"
+
+# Saved as the summary of a session where the visitor wrote nothing. Shown on
+# the dashboard, not sent to Slack.
+SILENT_SUMMARY = "Opened the chat but did not write anything."
 
 # Longest transcript sent to the LLM, in characters. Keeps a very long chat
 # inside the model's context; the summary then covers the most recent part.
@@ -51,7 +69,13 @@ MAX_TRANSCRIPT_CHARS = 20_000
 @with_connection
 def find_sessions(conn, window: timedelta = SUMMARY_WINDOW) -> List[Dict[str, Any]]:
     """
-    Return one row per session that has a message within *window* of now.
+    Return one row per session that has a message within *window* of now and
+    still needs a summary. A session needs a summary when:
+
+        it has no chat_info row yet, or
+        its summary never reached Slack (summary_notified_at IS NULL), or
+        it got a message after the summary was written, so that summary
+        is out of date.
 
     Each row has:
         session_id     the session as a string
@@ -61,21 +85,27 @@ def find_sessions(conn, window: timedelta = SUMMARY_WINDOW) -> List[Dict[str, An
 
     Newest sessions first. The window is measured on the database clock
     (NOW()), so it does not depend on the app server's timezone.
+
+    chat_info.session_id is TEXT and the history table's is UUID; the join
+    casts the UUID. chat_info has one row per session (UNIQUE), so the join
+    never multiplies the message rows.
     """
     query = sql.SQL(
         """
         SELECT
-            session_id::text        AS session_id,
+            h.session_id::text      AS session_id,
             COUNT(*)                AS message_count,
-            MIN(created_at)         AS first_message,
-            MAX(created_at)         AS last_message
-        FROM {table}
-        WHERE created_at >= NOW() - %(window)s::interval
-        GROUP BY session_id
+            MIN(h.created_at)       AS first_message,
+            MAX(h.created_at)       AS last_message
+        FROM {table} h
+        LEFT JOIN chat_info ci ON ci.session_id = h.session_id::text
+        WHERE h.created_at >= NOW() - %(window)s::interval
+        GROUP BY h.session_id, ci.summary_notified_at, ci.summary_generated_at
+        HAVING ci.summary_notified_at IS NULL
+            OR MAX(h.created_at) > ci.summary_generated_at
         ORDER BY last_message DESC;
         """
     ).format(table=sql.Identifier(config.table_name))
-
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(query, {"window": window})
         return cur.fetchall()
@@ -86,8 +116,8 @@ def find_conversation(session_id: str) -> List[Dict[str, str]]:
     Return every message of one session, oldest first. Each item is
     {"type": "human" | "ai", "content": "..."}.
 
-    This reads the whole session, not only the last 24 hours, so the summary
-    has the full context of the conversation. It goes through the same pooled
+    This reads the whole session, not only the messages inside the window, so
+    the summary has the full context of the conversation. It goes through the same pooled
     history reader the /history endpoint uses, so the stored LangChain message
     format is decoded in one place.
     """
@@ -111,14 +141,36 @@ def _summary_prompt() -> str:
     return text or SUMMARY_PROMPT_FILE.read_text(encoding="utf-8")
 
 
+def llm_error_text(exc: BaseException) -> str:
+    """
+    A short name for an LLM failure, for the Slack message. The Groq SDK puts
+    the API's answer on ``exc.body`` as {"error": {"code": ..., "message":
+    ...}}; the code (rate_limit_exceeded, model_not_found, ...) is the most
+    useful part. Anything else falls back to the exception text, or its class
+    name when there is none.
+    """
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict):
+        code = error.get("code") or error.get("type") or error.get("message")
+        if code:
+            return str(code)
+    return str(exc).strip() or type(exc).__name__
+
+
+def is_silent(conversation: List[Dict[str, str]]) -> bool:
+    """True when the visitor never wrote: only agent messages, or none."""
+    return not any(m["type"] == "human" for m in conversation)
+
+
 def summarise_conversation(conversation: List[Dict[str, str]]) -> str:
     """
     Ask the LLM for a short plain-text summary of one conversation. Raises if
     the LLM call fails; daily_summary() decides what to do with that.
     """
-    if not any(m["type"] == "human" for m in conversation):
+    if is_silent(conversation):
         # Only the intro message was shown. No need to spend an LLM call.
-        return "The visitor opened the chat but did not write anything."
+        return SILENT_SUMMARY
 
     prompt = _summary_prompt().replace("{conversation}", _format_transcript(conversation))
     llm = ChatGroq(groq_api_key=config.GROQ_API_KEY, model=config.GROQ_MODEL_NAME)
@@ -194,25 +246,31 @@ def summary_notified_at(conn, session_ids: List[str]) -> int:
 
 def daily_summary() -> Dict[str, Any]:
     """
-    Build the daily summary: for each session active in the last 24 hours,
-    fetch the conversation, summarise it, and save the summary on chat_info.
-    Then send all of them to Slack.
+    Build the summary: for each session that still needs one (see
+    find_sessions), fetch the conversation, summarise it, and save the
+    summary on chat_info. Then send all of them to Slack.
 
     One session failing does not stop the others. The failure is logged and
-    the session is returned with an ``error`` field instead of a summary. A
+    the session is returned with an ``error`` field instead of a summary.
+    When the failure was the LLM call, the session also carries
+    ``llm_error`` (see llm_error_text), which Slack reports as one sentence
+    for the whole run instead of one line per conversation. A
     Slack failure is recorded under ``slack`` and does not raise: the
     summaries are already saved by then. After a successful Slack delivery
     the summarised sessions get summary_notified_at set; the count is
-    returned under ``notified_count``.
+    returned under ``notified_count``. Sessions that were not stamped, for
+    either reason, are found again by the next run.
+
+    A silent session (see is_silent) is marked ``silent`` and stamped whether
+    or not anything was sent to Slack: there is nothing to tell the channel,
+    and the stamp keeps it out of the next run. ``silent_count`` says how
+    many there were.
     """
-    # The window the Slack header shows. find_sessions() measures the same
-    # window on the database clock, so the two can differ by the query time.
-    window_end = datetime.now()
-    window_start = window_end - SUMMARY_WINDOW
+    # When this run happened, in the timezone the Slack message is read in.
+    run_at = datetime.now(ZoneInfo(config.DAILY_SUMMARY_TIMEZONE))
 
     sessions = find_sessions()
-    window_hours = SUMMARY_WINDOW.total_seconds() / 3600
-    print(f"[DAILY_SUMMARY] {len(sessions)} session(s) active in the last {window_hours:g} hours")
+    print(f"[DAILY_SUMMARY] {len(sessions)} session(s) waiting for a summary")
 
     # One database call at a time. find_sessions() has released its connection
     # by now, so none of these nest two pooled connections.
@@ -223,7 +281,15 @@ def daily_summary() -> Dict[str, Any]:
             print(f"[DAILY_SUMMARY] session {session_id}: "
                   f"{len(session['conversation'])} message(s) in full conversation")
 
-            summary = summarise_conversation(session["conversation"])
+            if is_silent(session["conversation"]):
+                session["silent"] = True
+                summary = SILENT_SUMMARY
+            else:
+                try:
+                    summary = summarise_conversation(session["conversation"])
+                except Exception as exc:
+                    session["llm_error"] = llm_error_text(exc)
+                    raise
             session["lead"] = save_summary(session_id, summary)
             session["summary"] = summary
         except Exception as exc:
@@ -232,11 +298,11 @@ def daily_summary() -> Dict[str, Any]:
             session["error"] = str(exc)
 
     result = {
-        "window_hours": window_hours,
-        "window_start": window_start,
-        "window_end": window_end,
+        "run_at": run_at,
         "session_count": len(sessions),
         "summarised_count": sum(1 for s in sessions if "summary" in s),
+        "llm_failed_count": sum(1 for s in sessions if "llm_error" in s),
+        "silent_count": sum(1 for s in sessions if s.get("silent")),
         "sessions": sessions,
     }
 
@@ -247,15 +313,17 @@ def daily_summary() -> Dict[str, Any]:
         print(traceback.format_exc())
         result["slack"] = {"sent": 0, "error": str(exc)}
 
-    # Only sessions whose summary reached Slack are stamped. Sessions that
-    # failed to summarise appear in the message as an error line, not a
-    # summary, so they stay unnotified and are tried again next run.
-    result["notified_count"] = 0
+    # Silent sessions are stamped whatever Slack did: they were never meant
+    # to be sent. Other sessions are stamped only when their summary reached
+    # Slack. Sessions that failed to summarise have no summary, so they stay
+    # unnotified and are tried again next run.
+    to_stamp = [s["session_id"] for s in sessions if "summary" in s and s.get("silent")]
     if result["slack"].get("sent", 0) > 0:
+        to_stamp += [s["session_id"] for s in sessions if "summary" in s and not s.get("silent")]
+    result["notified_count"] = 0
+    if to_stamp:
         try:
-            result["notified_count"] = summary_notified_at(
-                [s["session_id"] for s in sessions if "summary" in s]
-            )
+            result["notified_count"] = summary_notified_at(to_stamp)
         except Exception as exc:
             print(f"[DAILY_SUMMARY] could not mark sessions as notified: {exc}")
             print(traceback.format_exc())

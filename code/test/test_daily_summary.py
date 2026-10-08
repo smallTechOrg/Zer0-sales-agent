@@ -2,10 +2,13 @@
 The daily summary chain against the real schema. The LLM call is replaced
 with a stub so the tests need no Groq key and are deterministic.
 
-find_sessions() must see a session that just wrote a message and skip one
-whose message is older than the window. find_conversation() must return the
-whole session. save_summary() must write to chat_info and return the lead row.
-daily_summary() must run the chain and keep going when one session fails.
+find_sessions() must see a session that just wrote a message and still has
+no summary, skip one whose message is older than the window, skip one whose
+summary already reached Slack, and see again one that kept talking after its
+summary was written. find_conversation() must return the whole session.
+save_summary() must write to chat_info and return the lead row.
+daily_summary() must run the chain, keep going when one session fails, and
+leave nothing behind for the next run once Slack accepted the message.
 """
 import sys
 import os
@@ -45,22 +48,68 @@ def _chat_info_row(session_id):
             return cur.fetchone()
 
 
-@pytest.fixture
-def sessions():
-    """One session with a fresh message, one with a message 2 days old."""
-    recent = str(uuid.uuid4())
-    stale = str(uuid.uuid4())
-    _insert_message(recent, timedelta(minutes=5))
-    _insert_message(recent, timedelta(minutes=1), msg_type="ai", content="hello")
-    _insert_message(stale, timedelta(days=2))
-    yield recent, stale
+def _mark_summarised(session_id, generated_age, notified=True):
+    """
+    Give a session a chat_info row that looks like an earlier run summarised
+    it *generated_age* ago and, unless notified=False, sent it to Slack.
+    """
+    with db_pool.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chat_info (session_id, summary, summary_generated_at, summary_notified_at)
+                VALUES (%s, 'old summary', NOW() - %s::interval,
+                        CASE WHEN %s THEN NOW() - %s::interval ELSE NULL END);
+                """,
+                (session_id, generated_age, notified, generated_age),
+            )
+
+
+def _cleanup(session_ids):
     query = sql.SQL("DELETE FROM {table} WHERE session_id = ANY(%s::uuid[]);").format(
         table=sql.Identifier(config.table_name)
     )
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, ([recent, stale],))
-            cur.execute("DELETE FROM chat_info WHERE session_id = ANY(%s::text[]);", ([recent, stale],))
+            cur.execute(query, (session_ids,))
+            cur.execute("DELETE FROM chat_info WHERE session_id = ANY(%s::text[]);", (session_ids,))
+
+
+@pytest.fixture
+def sessions():
+    """
+    recent  fresh messages, no chat_info row: needs a summary
+    stale   one message 10 days old, outside the window: skipped
+    """
+    recent = str(uuid.uuid4())
+    stale = str(uuid.uuid4())
+    _insert_message(recent, timedelta(minutes=5))
+    _insert_message(recent, timedelta(minutes=1), msg_type="ai", content="hello")
+    _insert_message(stale, timedelta(days=10))
+    yield recent, stale
+    _cleanup([recent, stale])
+
+
+@pytest.fixture
+def summarised_sessions():
+    """
+    done       summarised and sent to Slack after its last message: skipped
+    continued  summarised and sent, then the visitor wrote again: needs a
+               fresh summary
+    unsent     summarised, but Slack never got it: needs to go out again
+    """
+    done = str(uuid.uuid4())
+    continued = str(uuid.uuid4())
+    unsent = str(uuid.uuid4())
+    _insert_message(done, timedelta(minutes=30))
+    _mark_summarised(done, timedelta(minutes=10))
+    _insert_message(continued, timedelta(minutes=30))
+    _mark_summarised(continued, timedelta(minutes=10))
+    _insert_message(continued, timedelta(minutes=2), content="one more thing")
+    _insert_message(unsent, timedelta(minutes=30))
+    _mark_summarised(unsent, timedelta(minutes=10), notified=False)
+    yield done, continued, unsent
+    _cleanup([done, continued, unsent])
 
 
 @pytest.fixture(autouse=True)
@@ -117,9 +166,21 @@ class TestFindSessions:
         from daily_summary import find_sessions
 
         recent, stale = sessions
-        ids = {row["session_id"] for row in find_sessions(window=timedelta(days=3))}
+        ids = {row["session_id"] for row in find_sessions(window=timedelta(days=30))}
         assert recent in ids
         assert stale in ids
+
+    def test_skips_sent_and_keeps_continued_and_unsent(self, summarised_sessions):
+        from daily_summary import find_sessions
+
+        done, continued, unsent = summarised_sessions
+        by_id = {row["session_id"]: row for row in find_sessions()}
+
+        assert done not in by_id
+        assert continued in by_id
+        assert unsent in by_id
+        # Both messages of the continued session are inside the window.
+        assert by_id[continued]["message_count"] == 2
 
 
 class TestFindConversation:
@@ -163,7 +224,7 @@ class TestSummariseConversation:
         from daily_summary import summarise_conversation
 
         summary = summarise_conversation([{"type": "ai", "content": "Welcome!"}])
-        assert "did not write anything" in summary
+        assert summary == "Opened the chat but did not write anything."
         assert fake_llm == []
 
     def test_long_transcript_is_cut_from_the_front(self, fake_llm):
@@ -266,8 +327,7 @@ class TestDailySummary:
         assert len(fake_slack) == 1
         assert fake_slack[0]["sessions"] is result["sessions"]
 
-        assert result["window_hours"] == 24
-        assert result["window_end"] - result["window_start"] == timedelta(hours=24)
+        assert result["run_at"] is not None
         assert result["session_count"] == len(result["sessions"])
         assert result["summarised_count"] >= 1
 
@@ -283,6 +343,42 @@ class TestDailySummary:
         assert row["summary_notified_at"] is not None
         assert result["notified_count"] >= 1
 
+    def test_second_run_leaves_a_sent_session_alone(self, sessions, fake_llm, fake_slack):
+        from daily_summary import daily_summary
+
+        recent, _ = sessions
+        daily_summary()
+        calls_after_first = len(fake_llm)
+
+        result = daily_summary()
+
+        ids = {s["session_id"] for s in result["sessions"]}
+        assert recent not in ids
+        # No new LLM call was spent on the session already in Slack.
+        assert len(fake_llm) == calls_after_first
+
+    def test_failed_session_is_found_again_next_run(self, sessions, fake_llm, fake_slack, monkeypatch):
+        import daily_summary
+
+        recent, _ = sessions
+        real_summarise = daily_summary.summarise_conversation
+
+        def boom(conversation):
+            raise RuntimeError("llm down")
+
+        monkeypatch.setattr(daily_summary, "summarise_conversation", boom)
+        first = daily_summary.daily_summary()
+        assert "error" in {s["session_id"]: s for s in first["sessions"]}[recent]
+        # Nothing was saved, so nothing was stamped.
+        assert _chat_info_row(recent) is None
+
+        monkeypatch.setattr(daily_summary, "summarise_conversation", real_summarise)
+        second = daily_summary.daily_summary()
+
+        by_id = {s["session_id"]: s for s in second["sessions"]}
+        assert by_id[recent]["summary"] == "Visitor asked about pricing."
+        assert _chat_info_row(recent)["summary_notified_at"] is not None
+
     def test_one_failure_does_not_stop_the_job(self, sessions, monkeypatch):
         import daily_summary
 
@@ -296,9 +392,90 @@ class TestDailySummary:
 
         by_id = {s["session_id"]: s for s in result["sessions"]}
         assert by_id[recent]["error"] == "llm down"
+        assert by_id[recent]["llm_error"] == "llm down"
         assert "summary" not in by_id[recent]
         assert result["summarised_count"] == 0
+        assert result["llm_failed_count"] >= 1
         assert _chat_info_row(recent) is None
+
+    def test_silent_session_is_saved_stamped_and_not_sent(self, fake_llm, monkeypatch):
+        import daily_summary
+
+        silent = str(uuid.uuid4())
+        _insert_message(silent, timedelta(minutes=5), msg_type="ai", content="Welcome!")
+        # Slack has nothing to send for this run, so it reports a skip.
+        monkeypatch.setattr(daily_summary, "send_summaries_to_slack",
+                            lambda result: {"sent": 0, "skipped": "nothing to report"})
+        try:
+            result = daily_summary.daily_summary()
+
+            session = {s["session_id"]: s for s in result["sessions"]}[silent]
+            assert session["silent"] is True
+            assert session["summary"] == daily_summary.SILENT_SUMMARY
+            assert fake_llm == []
+            assert result["silent_count"] == 1
+            # Stamped even though nothing reached Slack.
+            row = _chat_info_row(silent)
+            assert row["summary"] == daily_summary.SILENT_SUMMARY
+            assert row["summary_notified_at"] is not None
+            assert result["notified_count"] == 1
+
+            # Not selected again.
+            assert silent not in {r["session_id"] for r in daily_summary.find_sessions()}
+
+            # The visitor comes back and writes: the session is selected
+            # again and gets a real summary this time.
+            _insert_message(silent, timedelta(seconds=0), content="hello, pricing?")
+            monkeypatch.setattr(daily_summary, "send_summaries_to_slack", lambda result: {"sent": 1})
+            second = daily_summary.daily_summary()
+            session = {s["session_id"]: s for s in second["sessions"]}[silent]
+            assert "silent" not in session
+            assert session["summary"] == "Visitor asked about pricing."
+            assert len(fake_llm) == 1
+        finally:
+            _cleanup([silent])
+
+    def test_save_failure_is_not_an_llm_error(self, sessions, fake_llm, monkeypatch):
+        import daily_summary
+
+        recent, _ = sessions
+
+        def boom(session_id, summary):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(daily_summary, "save_summary", boom)
+        result = daily_summary.daily_summary()
+
+        session = {s["session_id"]: s for s in result["sessions"]}[recent]
+        assert session["error"] == "db down"
+        assert "llm_error" not in session
+        assert result["llm_failed_count"] == 0
+
+
+class TestLlmErrorText:
+    def test_groq_style_body_gives_the_code(self):
+        from daily_summary import llm_error_text
+
+        exc = RuntimeError("Error code: 429 - {...}")
+        exc.body = {"error": {"code": "rate_limit_exceeded", "message": "Rate limit reached"}}
+        assert llm_error_text(exc) == "rate_limit_exceeded"
+
+    def test_body_without_code_falls_back_to_type_then_message(self):
+        from daily_summary import llm_error_text
+
+        exc = RuntimeError("x")
+        exc.body = {"error": {"message": "Service unavailable"}}
+        assert llm_error_text(exc) == "Service unavailable"
+
+    def test_plain_exception_gives_its_text(self):
+        from daily_summary import llm_error_text
+
+        assert llm_error_text(RuntimeError("llm down")) == "llm down"
+
+    def test_empty_message_gives_the_class_name(self):
+        from daily_summary import llm_error_text
+
+        assert llm_error_text(TimeoutError()) == "TimeoutError"
 
     def test_slack_failure_is_recorded_not_raised(self, sessions, fake_llm, monkeypatch):
         import daily_summary

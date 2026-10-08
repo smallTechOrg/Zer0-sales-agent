@@ -1,6 +1,6 @@
 """
-The scheduler registers the daily summary job on the configured interval,
-can be turned off, starts once per process, and the job swallows errors so
+The scheduler registers the daily summary job on the configured cron pattern,
+starts once per process, and the job swallows errors so
 the next run still happens. daily_summary() itself is stubbed here.
 """
 import sys
@@ -22,9 +22,9 @@ def fresh_scheduler():
 
 
 class TestStart:
-    def test_registers_job_on_configured_interval(self, monkeypatch):
-        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_ENABLED", True)
-        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_INTERVAL_MINUTES", 3)
+    def test_registers_job_on_configured_cron_pattern(self, monkeypatch):
+        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_CRON", "30 9 * * *")
+        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_TIMEZONE", "Asia/Kolkata")
 
         sched = scheduler.start_scheduler()
 
@@ -32,25 +32,21 @@ class TestStart:
         job = sched.get_job(scheduler.JOB_ID)
         assert job is not None
         assert job.func is scheduler.run_daily_summary_job
-        assert job.trigger.interval.total_seconds() == 3 * 60
+        # The pattern is read in the configured timezone, not the server's.
+        assert job.next_run_time.hour == 9
+        assert job.next_run_time.minute == 30
+        assert str(job.next_run_time.tzinfo) == "Asia/Kolkata"
         assert job.max_instances == 1
         assert job.coalesce is True
         assert job.next_run_time is not None
 
-    def test_disabled_schedules_nothing(self, monkeypatch):
-        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_ENABLED", False)
-        assert scheduler.start_scheduler() is None
-        assert scheduler.get_scheduler() is None
-
-    def test_second_start_returns_same_scheduler(self, monkeypatch):
-        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_ENABLED", True)
+    def test_second_start_returns_same_scheduler(self):
         first = scheduler.start_scheduler()
         second = scheduler.start_scheduler()
         assert first is second
         assert len(first.get_jobs()) == 1
 
-    def test_stop_is_idempotent(self, monkeypatch):
-        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_ENABLED", True)
+    def test_stop_is_idempotent(self):
         sched = scheduler.start_scheduler()
         scheduler.stop_scheduler()
         scheduler.stop_scheduler()

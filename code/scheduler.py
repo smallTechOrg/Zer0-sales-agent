@@ -2,15 +2,13 @@
 Background scheduler for the daily chat summary.
 
 An APScheduler BackgroundScheduler runs in a thread inside the Flask process
-and calls daily_summary.daily_summary() on a fixed interval. Settings come
+and calls daily_summary.daily_summary() on a cron schedule. Settings come
 from config:
 
-    DAILY_SUMMARY_ENABLED           turn the job off without a code change
-    DAILY_SUMMARY_INTERVAL_MINUTES  minutes between runs
+    DAILY_SUMMARY_CRON      five-field cron pattern, e.g. "0 * * * *"
+    DAILY_SUMMARY_TIMEZONE  timezone the pattern is read in
 
-One scheduler per process. Werkzeug's reloader runs the app in two processes
-during local development; app.py stops the parent's scheduler before the
-reloader starts the child, so the job does not run twice.
+One scheduler per process.
 """
 import atexit
 import threading
@@ -18,6 +16,7 @@ import traceback
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 import config
 from daily_summary import daily_summary
@@ -46,17 +45,12 @@ def run_daily_summary_job() -> None:
         print(traceback.format_exc())
 
 
-def start_scheduler() -> Optional[BackgroundScheduler]:
+def start_scheduler() -> BackgroundScheduler:
     """
     Start the scheduler with the daily summary job. Safe to call more than
-    once: a second call returns the running scheduler. Returns None when the
-    job is turned off.
+    once: a second call returns the running scheduler.
     """
     global _scheduler
-
-    if not config.DAILY_SUMMARY_ENABLED:
-        print("[SCHEDULER] DAILY_SUMMARY_ENABLED is false. Daily summary job not scheduled.")
-        return None
 
     with _lock:
         if _scheduler is not None and _scheduler.running:
@@ -65,8 +59,9 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
         scheduler = BackgroundScheduler(daemon=True)
         scheduler.add_job(
             run_daily_summary_job,
-            trigger="interval",
-            minutes=config.DAILY_SUMMARY_INTERVAL_MINUTES,
+            trigger=CronTrigger.from_crontab(
+                config.DAILY_SUMMARY_CRON, timezone=config.DAILY_SUMMARY_TIMEZONE
+            ),
             id=JOB_ID,
             name="Daily chat summary",
             # A run that is still going when the next one is due: skip the new
@@ -82,8 +77,8 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
 
     job = scheduler.get_job(JOB_ID)
     print(
-        f"[SCHEDULER] Daily summary job scheduled every "
-        f"{config.DAILY_SUMMARY_INTERVAL_MINUTES} minute(s); next run at {job.next_run_time}"
+        f"[SCHEDULER] Daily summary job scheduled on '{config.DAILY_SUMMARY_CRON}' "
+        f"({config.DAILY_SUMMARY_TIMEZONE}); next run at {job.next_run_time}"
     )
     return scheduler
 
