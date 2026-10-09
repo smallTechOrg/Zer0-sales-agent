@@ -1,9 +1,12 @@
+import logging
 from http import HTTPStatus
 from urllib.parse import urlparse
 from api.models import ValidationResponse
 from config import max_input_length, agent_type , status_type
 import uuid
 from db_pool import with_connection
+
+log = logging.getLogger(__name__)
 
 def chat_api_validate(request) -> ValidationResponse:
     chat_input_validation_response = validate_chat_user_input(request)
@@ -90,8 +93,8 @@ def validate_session_id(request):
             return ValidationResponse(False, "Invalid session id format")
         return ValidationResponse(True)
 
-    except Exception as e:
-        print(f"[Error] {e}")
+    except Exception:
+        log.exception("session_id validation failed")
         return {"is_valid":False, "message":"Internal Server Error", "status":HTTPStatus.INTERNAL_SERVER_ERROR}
 
     

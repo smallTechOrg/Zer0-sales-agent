@@ -1,7 +1,10 @@
+import logging
 from typing import List, Dict, Any, Tuple
 from psycopg.rows import dict_row
 from db_pool import with_connection
 from http import HTTPStatus
+
+log = logging.getLogger(__name__)
 
 
 @with_connection
@@ -32,6 +35,6 @@ def get_all_chat_info() -> Tuple[List[Dict[str, Any]], HTTPStatus]:
     try:
         return _select_chat_info(), HTTPStatus.OK
 
-    except Exception as e:
-        print("Error fetching chat-info:", e)
+    except Exception:
+        log.exception("Error fetching chat-info")
         raise

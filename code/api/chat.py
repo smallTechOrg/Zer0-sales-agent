@@ -1,6 +1,6 @@
 
+import logging
 from http import HTTPStatus
-import traceback
 from flask import Blueprint, jsonify, request
 from werkzeug.exceptions import HTTPException
 from api.models import APIResponse
@@ -9,6 +9,8 @@ from leads import get_all_chat_info
 from leads_update import update_chat_info, update_contact_info
 from llm_api import get_groq_response
 from api.validators import validate_contact_data, validate_history_data, validate_update_data, chat_api_validate
+
+log = logging.getLogger(__name__)
 
 chat_bp = Blueprint("chat", __name__)
 
@@ -35,9 +37,8 @@ def chat_api():
     except HTTPException:
         # A bad request already has the correct status code. Do not change it.
         raise
-    except Exception as e:
-        print(f"Error during LLM call: {e}")
-        print(traceback.format_exc())
+    except Exception:
+        log.exception("Error during LLM call")
         return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
@@ -57,7 +58,7 @@ def patch_updates():
     except HTTPException:
         raise
     except Exception:
-        print(traceback.format_exc())
+        log.exception("Error in chat-info PATCH endpoint")
         return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
@@ -78,7 +79,7 @@ def patch_contact_info():
     except HTTPException:
         raise
     except Exception:
-        print(traceback.format_exc())
+        log.exception("Error in chat-info/contact PATCH endpoint")
         return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
@@ -87,9 +88,8 @@ def get_chat_info():
     try:
         leads_data, status = get_all_chat_info()
         return APIResponse(None,{'leads': leads_data}).response(HTTPStatus.OK)
-    except Exception as e:
-        print(f"Error in get_leads endpoint: {e}")
-        print(traceback.format_exc())
+    except Exception:
+        log.exception("Error in chat-info GET endpoint")
         return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
@@ -106,7 +106,6 @@ def history_endpoint():
         return jsonify(history_data), status
     except HTTPException:
         raise
-    except Exception as e:
-        print(f"Error in history endpoint: {e}")
-        print(traceback.format_exc())
+    except Exception:
+        log.exception("Error in history endpoint")
         return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)

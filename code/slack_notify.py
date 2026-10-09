@@ -3,6 +3,7 @@ Post the periodic chat summary to Slack through an incoming webhook.
 One line per conversation ("7th Oct, 4:13 pm - SMALLTECH - Anjali - summary"); LLM failures
 become one sentence at the end, and silent sessions are left out.
 """
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -10,6 +11,8 @@ from zoneinfo import ZoneInfo
 import requests
 
 import config
+
+log = logging.getLogger(__name__)
 
 # Slack accepts about 40,000 characters in ``text``. Stay well under it and
 # split a long run into several messages.
@@ -30,21 +33,21 @@ def send_summaries_to_slack(result: Dict[str, Any]) -> Dict[str, Any]:
     webhook. Raises if a post fails, so the caller can record it.
     """
     if not result.get("sessions"):
-        print("[SLACK] No sessions waiting for a summary. Skipping Slack delivery.")
+        log.info("No sessions waiting for a summary. Skipping Slack delivery.")
         return {"sent": 0, "skipped": "no sessions"}
 
     if not config.SLACK_WEBHOOK_URL:
-        print("[SLACK] SLACK_WEBHOOK_URL is not set. Skipping Slack delivery.")
+        log.info("SLACK_WEBHOOK_URL is not set. Skipping Slack delivery.")
         return {"sent": 0, "skipped": "SLACK_WEBHOOK_URL not set"}
 
     messages = build_messages(result)
     if not messages:
-        print("[SLACK] Only silent sessions in this run. Skipping Slack delivery.")
+        log.info("Only silent sessions in this run. Skipping Slack delivery.")
         return {"sent": 0, "skipped": "nothing to report"}
 
     for payload in messages:
         post_to_slack(payload)
-    print(f"[SLACK] Sent {len(messages)} message(s) to Slack.")
+    log.info("Sent %d message(s) to Slack.", len(messages))
     return {"sent": len(messages)}
 
 

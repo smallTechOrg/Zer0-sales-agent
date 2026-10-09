@@ -1,4 +1,8 @@
+import logging
+
 from db_pool import with_connection
+
+log = logging.getLogger(__name__)
 
 
 @with_connection
@@ -28,11 +32,15 @@ def update_contact_info(conn, session_id: str, name: str = None, email: str = No
             if mobile:  updates.append(f"mobile='{mobile}'")
             if country: updates.append(f"country='{country}'")
 
-            print(f"[DATABASE] Contact updated for session {session_id}: {', '.join(updates) if updates else 'no new info'}")
+            log.info(
+                "Contact updated for session %s: %s",
+                session_id,
+                ", ".join(updates) if updates else "no new info",
+            )
             return bool(updated_row)
 
-    except Exception as e:
-        print(f"[DATABASE ERROR] Failed to update contact for {session_id}: {str(e)}")
+    except Exception:
+        log.exception("Failed to update contact for %s", session_id)
         raise
 
 
@@ -68,9 +76,13 @@ def update_chat_info(conn, session_id: str, status: str = None, remarks: str = N
             if remarks: updates.append(f"remarks='{remarks}'")
             if is_active is not None: updates.append(f"is_active={1 if is_active else 0}")
 
-            print(f"[DATABASE] Info updated for session {session_id}: {', '.join(updates) if updates else 'no new info'}")
+            log.info(
+                "Info updated for session %s: %s",
+                session_id,
+                ", ".join(updates) if updates else "no new info",
+            )
             return bool(updated_row)
 
-    except Exception as e:
-        print(f"[DATABASE ERROR] Failed to update lead for {session_id}: {str(e)}")
+    except Exception:
+        log.exception("Failed to update lead for %s", session_id)
         raise

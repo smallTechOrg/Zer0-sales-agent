@@ -1,3 +1,4 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from langchain_groq import ChatGroq
 from config import GROQ_API_KEY, GROQ_MODEL_NAME, agent_type
@@ -6,6 +7,8 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from conversation_processor.conversation_processor import process_conversation
 from history import get_session_history
+
+log = logging.getLogger(__name__)
 
 
 def get_groq_response(input_text, session_id, request_type, domain):
@@ -77,9 +80,15 @@ def _process_conversation_async(input_text, session_id, request_type, domain):
     def process_in_background():
         try:
             process_conversation(input_text, session_id, request_type, domain)
-            print("[LLM_API] Async conversation processing completed")
+            log.info("Async conversation processing completed")
         except Exception as processing_error:
-            print(f"[LLM_API] Warning: Async conversation processing failed: {processing_error}")
+            # The chat reply already went out, so this is not fatal. Keep the
+            # traceback: it is the only record of a failure in this thread.
+            log.warning(
+                "Async conversation processing failed: %s",
+                processing_error,
+                exc_info=True,
+            )
     
     # Submit to thread pool for background processing
     with ThreadPoolExecutor(max_workers=1) as executor:
