@@ -20,6 +20,10 @@ DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 # sets the port itself.
 PORT = int(os.getenv("PORT", "5001"))
 
+# Set by Werkzeug in the process that serves requests when the debug reloader
+# is on. The watcher parent does not have it. See the __main__ block in app.py.
+WERKZEUG_RUN_MAIN = os.getenv("WERKZEUG_RUN_MAIN") == "true"
+
 # ---------------------------------------------------------------------------
 # LLM (Groq)
 # ---------------------------------------------------------------------------
@@ -32,6 +36,31 @@ GROQ_BACKUP_MODEL_NAME = os.environ.get("GROQ_BACKUP_MODEL_NAME")
 # ---------------------------------------------------------------------------
 max_input_length = int(os.getenv("MAX_INPUT_LENGTH", "10000"))
 DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "COMMON")
+
+# ---------------------------------------------------------------------------
+# Slack (periodic summary)
+# ---------------------------------------------------------------------------
+# Incoming webhook for the channel that receives the periodic chat summary.
+# Unset: the summary job runs and saves to the database, and skips Slack.
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+# Seconds to wait for one webhook POST.
+SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
+# The Slack message header links here.
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zero.smalltech.in/dashboard?h=khuljasimsim")
+# How many days back the summary job looks for sessions without a summary.
+# Only a cap on retries: a session is summarised once and then left alone, so
+# the first run after a long outage does not go through the whole history.
+SUMMARY_WINDOW_DAYS = int(os.getenv("SUMMARY_WINDOW_DAYS", "7"))
+
+# ---------------------------------------------------------------------------
+# Scheduler (see code/scheduler.py)
+# ---------------------------------------------------------------------------
+# When the periodic summary job runs, as a five-field cron pattern
+# (minute hour day month weekday). Default: at the start of every hour.
+PERIODIC_SUMMARY_CRON = os.getenv("PERIODIC_SUMMARY_CRON", "0 * * * *")
+# Timezone the pattern is read in. Without this a server running in UTC
+# would fire at the wrong local time.
+PERIODIC_SUMMARY_TIMEZONE = os.getenv("PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
 
 # ---------------------------------------------------------------------------
 # Database
@@ -123,6 +152,7 @@ DB_APPLICATION_NAME = os.getenv("DB_APPLICATION_NAME", "zero-sales-agent")
 # Seconds that startup waits for the schema, then the number of retries.
 DB_STARTUP_WAIT = float(os.getenv("DB_STARTUP_WAIT", "5"))
 DB_BOOTSTRAP_ATTEMPTS = int(os.getenv("DB_BOOTSTRAP_ATTEMPTS", "600"))
+
 
 
 class agent_type(str, Enum):
