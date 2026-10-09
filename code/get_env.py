@@ -5,7 +5,8 @@ import sys
 PROJECT_ID = "ai-agent-boilerplate0"  
 SECRET_MAPPING = {
     "GROQ_API_KEY": "GROQ_API_KEY",           
-    "POSTGRES_URL": "POSTGRES_URL"
+    "POSTGRES_URL": "POSTGRES_URL",
+    "SLACK_WEBHOOK_URL": "SLACK_WEBHOOK_URL"
 }
 ENV_FILE_PATH = ".env"
 
@@ -33,6 +34,7 @@ GROQ_MODEL_NAME=openai/gpt-oss-120b
 DATABASE_URL={secrets['POSTGRES_URL']}
 
 # Slack
+SLACK_WEBHOOK_URL={secrets['SLACK_WEBHOOK_URL']}
 SLACK_TIMEOUT=10
 """
 
