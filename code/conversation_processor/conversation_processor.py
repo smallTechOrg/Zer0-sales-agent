@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from db import sync_connection
+from db_pool import with_connection
 from langchain_groq import ChatGroq
 from config import GROQ_API_KEY, GROQ_MODEL_NAME, agent_type
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -33,14 +33,15 @@ def process_conversation(user_input, session_id, request_type, domain):
         print(f"[PROCESSOR] Error in conversation processor: {e}")
         # Don't let processing errors break the chat flow
 
-def _update_session_request_type(session_id, request_type, domain):
+@with_connection
+def _update_session_request_type(conn, session_id, request_type, domain):
     """
     Insert a new chat_info row with (session_id, request_type)
     only if session_id does not already exist.
     If the session_id exists, do nothing.
     """
     try:
-        with sync_connection.cursor() as cur:
+        with conn.cursor() as cur:
             insert_query = """
             INSERT INTO chat_info (
                 session_id,
@@ -51,19 +52,16 @@ def _update_session_request_type(session_id, request_type, domain):
             """
 
             cur.execute(insert_query, (session_id, request_type, domain))
-            sync_connection.commit()
 
             if cur.rowcount and cur.rowcount > 0:
                 print(f"[CREATE] Inserted new chat_info for session_id={session_id} with request_type='{request_type}'and domain ='{domain}'")
             else:
-                print(f"[CREATE] session_id={session_id} already exists — no action taken")
+                print(f"[CREATE] session_id={session_id} already exists - no action taken")
 
     except Exception as e:
         print(f"Error inserting request_type row: {e}")
-        try:
-            sync_connection.rollback()
-        except Exception:
-            pass
+        raise
+
 
 def _has_valid_info(info_data, request_type):
     """
@@ -129,102 +127,89 @@ def _detect_info_with_llm(message, request_type, domain):
         print(f"[INFO_DETECTION] Error in LLM contact info detection: {e}")
         return {"contact_name": "", "email": "", "mobile": "", "country": ""}
     
-def _save_info_to_database(session_id, info_data, original_message, request_type, domain):
+@with_connection
+def _save_info_to_database(conn, session_id, info_data, original_message, request_type, domain):
     """
     Save detected info to chat_info table.
-    
+
     Args:
         session_id (str): Session identifier
         info_data: Extracted info
         original_message (str): The original message where contact info was detected
         request_type: type of request
     """
-    try:
-        # Ensure clean transaction state
-        sync_connection.rollback()
-        
-        with sync_connection.cursor() as cur:
+    with conn.cursor() as cur:
 
-            metadata = {
-                "info_detected_from_message": original_message,
-                "detection_method": request_type,
-                "detection_timestamp": datetime.now().isoformat()
-            }
-        
-            # For sales requests, extract name, email, and country
-            contact_name = info_data.get('contact_name', '').strip() or None
-            email = info_data.get('email', '').strip() or None
-            country = info_data.get('country', '').strip() or None
-            mobile = info_data.get('mobile', '').strip() or None
-            
-            # Always update with new information (allow corrections)
-            # Only keep existing data if new data is explicitly empty/None
-            insert_query = """
-            INSERT INTO chat_info (
-                session_id, 
-                contact_name, 
-                email,
-                country,
-                mobile,
-                request_type,
-                domain,
-                metadata,
-                created_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s,%s)
-            ON CONFLICT (session_id) 
-            DO UPDATE SET 
-                contact_name = CASE 
-                    WHEN EXCLUDED.contact_name IS NOT NULL THEN EXCLUDED.contact_name 
-                    ELSE chat_info.contact_name 
-                END,
-                email = CASE 
-                    WHEN EXCLUDED.email IS NOT NULL THEN EXCLUDED.email 
-                    ELSE chat_info.email 
-                END,
-                country = CASE 
-                    WHEN EXCLUDED.country IS NOT NULL THEN EXCLUDED.country 
-                    ELSE chat_info.country 
-                END,
-                mobile = CASE 
-                    WHEN EXCLUDED.mobile IS NOT NULL THEN EXCLUDED.mobile 
-                    ELSE chat_info.mobile 
-                END,
-                request_type = EXCLUDED.request_type,
-                domain = EXCLUDED.domain,
-                metadata = EXCLUDED.metadata,
-                created_at = CASE 
-                    WHEN chat_info.created_at IS NULL THEN EXCLUDED.created_at 
-                    ELSE chat_info.created_at 
-                END
-            """
-            
-            cur.execute(insert_query, (
-                session_id,
-                contact_name,
-                email,
-                country,
-                mobile,
-                request_type,
-                domain,
-                json.dumps(metadata),
-                datetime.now()
-            ))
+        metadata = {
+            "info_detected_from_message": original_message,
+            "detection_method": request_type,
+            "detection_timestamp": datetime.now().isoformat()
+        }
 
-            sync_connection.commit()            
-            
-            # Log what was updated
-            updates = []
-            if contact_name: updates.append(f"contact_name='{contact_name}'")
-            if email: updates.append(f"email='{email}'")
-            if country: updates.append(f"country='{country}'")
-            if mobile: updates.append(f"mobile='{mobile}'")
-            
-            print(f"[DATABASE] Info updated for session {session_id}: {', '.join(updates) if updates else 'no new info'}")
+        # For sales requests, extract name, email, and country
+        contact_name = info_data.get('contact_name', '').strip() or None
+        email = info_data.get('email', '').strip() or None
+        country = info_data.get('country', '').strip() or None
+        mobile = info_data.get('mobile', '').strip() or None
 
-    except Exception as e:
-        print(f"[DATABASE] Error saving info to database: {e}")
-        # Rollback on error to clean transaction state
-        try:
-            sync_connection.rollback()
-        except:
-            pass
+        # Always update with new information (allow corrections)
+        # Only keep existing data if new data is explicitly empty/None
+        insert_query = """
+        INSERT INTO chat_info (
+            session_id, 
+            contact_name, 
+            email,
+            country,
+            mobile,
+            request_type,
+            domain,
+            metadata,
+            created_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s,%s)
+        ON CONFLICT (session_id) 
+        DO UPDATE SET 
+            contact_name = CASE 
+                WHEN EXCLUDED.contact_name IS NOT NULL THEN EXCLUDED.contact_name 
+                ELSE chat_info.contact_name 
+            END,
+            email = CASE 
+                WHEN EXCLUDED.email IS NOT NULL THEN EXCLUDED.email 
+                ELSE chat_info.email 
+            END,
+            country = CASE 
+                WHEN EXCLUDED.country IS NOT NULL THEN EXCLUDED.country 
+                ELSE chat_info.country 
+            END,
+            mobile = CASE 
+                WHEN EXCLUDED.mobile IS NOT NULL THEN EXCLUDED.mobile 
+                ELSE chat_info.mobile 
+            END,
+            request_type = EXCLUDED.request_type,
+            domain = EXCLUDED.domain,
+            metadata = EXCLUDED.metadata,
+            created_at = CASE 
+                WHEN chat_info.created_at IS NULL THEN EXCLUDED.created_at 
+                ELSE chat_info.created_at 
+            END
+        """
+
+        cur.execute(insert_query, (
+            session_id,
+            contact_name,
+            email,
+            country,
+            mobile,
+            request_type,
+            domain,
+            json.dumps(metadata),
+            datetime.now()
+        ))
+
+        # Log what was updated
+        updates = []
+        if contact_name: updates.append(f"contact_name='{contact_name}'")
+        if email: updates.append(f"email='{email}'")
+        if country: updates.append(f"country='{country}'")
+        if mobile: updates.append(f"mobile='{mobile}'")
+
+        print(f"[DATABASE] Info updated for session {session_id}: {', '.join(updates) if updates else 'no new info'}")

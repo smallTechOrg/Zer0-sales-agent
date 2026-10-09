@@ -1,27 +1,40 @@
 from flask import Blueprint, jsonify
-import psycopg
-from config import DATABASE_URL
+
+import config
+from db_pool import get_connection, get_pool
 
 health_bp = Blueprint("health", __name__)
+
 
 @health_bp.route("/health", methods=["GET"])
 def health():
     """
-    Health check endpoint that verifies application and database connectivity.
+    Report the state of the app and the database. The probe borrows from the
+    same pool as every other endpoint, so a green check means the API can
+    reach the database. One attempt and a short timeout keep it fast.
+
+    Schema state is not reported here. Creating and migrating tables is the
+    deployment's job, not something a liveness probe should discover.
     """
     status = {
         "message": "Hello World",
-        "database": "disconnected"
+        "database": "disconnected",
     }
-    
+
     try:
-        # Check database connectivity
-        with psycopg.connect(DATABASE_URL) as conn:
+        with get_connection(attempts=1, timeout=config.DB_HEALTH_TIMEOUT) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()
         status["database"] = "connected"
-        return jsonify(status), 200
+        code = 200
     except Exception as e:
         status["database_error"] = str(e)
-        return jsonify(status), 503
+        code = 503
+
+    try:
+        status["pool"] = get_pool().get_stats()
+    except Exception:  # the pool could not even be built
+        pass
+
+    return jsonify(status), code
