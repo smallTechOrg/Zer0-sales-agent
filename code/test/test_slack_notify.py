@@ -32,12 +32,8 @@ def _session(i, **extra):
         "first_message": datetime(2026, 10, 7, 16, 10 + i, tzinfo=IST),
         "conversation": [],
         "summary": f"Summary {i}.",
-        "lead": {
-            "session_id": f"00000000-0000-0000-0000-{i:012d}",
-            "name": f"Lead {i}",
-            "domain": "SMALLTECH",
-            "website": f"site{i}.example.com",
-        },
+        "name": f"Lead {i}",
+        "domain": "SMALLTECH",
     }
     s.update(extra)
     return s
@@ -126,11 +122,9 @@ class TestBuildMessages:
         assert message["text"].startswith(f"<{DASHBOARD}|Zer0 Chat Summary>\n")
 
     def test_missing_name_is_unknown(self):
-        blank = _session(1)
-        blank["lead"]["name"] = "   "
-        none = _session(2)
-        none["lead"]["name"] = None
-        no_lead = _session(3, lead=None)
+        blank = _session(1, name="   ")
+        none = _session(2, name=None)
+        no_lead = _session(3, name=None, domain=None)
         [message] = slack_notify.build_messages(_result([blank, none, no_lead]))
         lines = message["text"].split("\n")[1:]
         assert lines[0] == "4:11 pm - SMALLTECH - Unknown - Summary 1."
@@ -139,7 +133,7 @@ class TestBuildMessages:
 
     def test_domain_key_is_upper_cased(self):
         s = _session(1)
-        s["lead"]["domain"] = "silverwave"
+        s["domain"] = "silverwave"
         [message] = slack_notify.build_messages(_result([s]))
         assert "4:11 pm - SILVERWAVE - Lead 1 - Summary 1." in message["text"]
 

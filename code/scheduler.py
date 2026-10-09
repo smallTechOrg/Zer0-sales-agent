@@ -19,25 +19,6 @@ _scheduler: Optional[BackgroundScheduler] = None
 _lock = threading.Lock()
 
 
-def run_periodic_summary_job() -> None:
-    """
-    The scheduled job. Catches everything: an exception inside a job is only
-    logged by APScheduler, and the next run must still happen.
-    """
-    print("[SCHEDULER] periodic summary job started")
-    try:
-        result = periodic_summary()
-        print(
-            f"[SCHEDULER] periodic summary job finished: "
-            f"{result['summarised_count']}/{result['session_count']} session(s) summarised, "
-            f"{result.get('resent_count', 0)} resent, "
-            f"slack={result.get('slack')}"
-        )
-    except Exception as exc:
-        print(f"[SCHEDULER] periodic summary job failed: {exc}")
-        print(traceback.format_exc())
-
-
 def start_scheduler() -> BackgroundScheduler:
     """
     Start the scheduler with the periodic summary job. Safe to call more than
@@ -74,6 +55,25 @@ def start_scheduler() -> BackgroundScheduler:
         f"({config.PERIODIC_SUMMARY_TIMEZONE}); next run at {job.next_run_time}"
     )
     return scheduler
+
+
+def run_periodic_summary_job() -> None:
+    """
+    The scheduled job. Catches everything: an exception inside a job is only
+    logged by APScheduler, and the next run must still happen.
+    """
+    print("[SCHEDULER] periodic summary job started")
+    try:
+        result = periodic_summary()
+        print(
+            f"[SCHEDULER] periodic summary job finished: "
+            f"{result['summarised_count']}/{result['session_count']} session(s) summarised, "
+            f"{result.get('resent_count', 0)} resent, "
+            f"slack={result.get('slack')}"
+        )
+    except Exception as exc:
+        print(f"[SCHEDULER] periodic summary job failed: {exc}")
+        print(traceback.format_exc())
 
 
 def stop_scheduler() -> None:

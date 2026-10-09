@@ -6,7 +6,7 @@ summary_notified_at), and post to Slack, resending until Slack has it.
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import SystemMessage
@@ -62,7 +62,7 @@ def periodic_summary() -> Dict[str, Any]:
                 except Exception as exc:
                     session["llm_error"] = extract_llm_error_reason(exc)
                     raise
-            session["lead"] = save_summary(session_id, summary)
+            save_summary(session_id, summary)
             session["summary"] = summary
         except Exception as exc:
             print(f"[PERIODIC_SUMMARY] session {session_id} failed: {exc}")
@@ -82,7 +82,8 @@ def periodic_summary() -> Dict[str, Any]:
                 "session_id": row["session_id"],
                 "summary": row["summary"],
                 "first_message": row["first_message"],
-                "lead": row,
+                "domain": row["domain"],
+                "name": row["name"],
                 "resent": True,
             }
             if row["summary"] == SILENT_SUMMARY:
@@ -232,40 +233,23 @@ def summarise_conversation(conversation: List[Dict[str, str]]) -> str:
 
 
 @with_connection
-def save_summary(conn, session_id: str, summary: str) -> Optional[Dict[str, Any]]:
+def save_summary(conn, session_id: str, summary: str) -> None:
     """
     Upsert the summary and summary_generated_at on the session's chat_info row
-    (created if missing) and return the lead details with the resolved website.
+    (created if missing).
     """
-    with conn.cursor(row_factory=dict_row) as cur:
+    with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO chat_info (session_id, summary, summary_generated_at)
             VALUES (%s, %s, NOW())
             ON CONFLICT (session_id) DO UPDATE SET
                 summary              = EXCLUDED.summary,
-                summary_generated_at = EXCLUDED.summary_generated_at
-            RETURNING
-                session_id,
-                COALESCE(contact_name, '') AS name,
-                COALESCE(email, '')        AS email,
-                COALESCE(mobile, '')       AS mobile,
-                COALESCE(country, '')      AS country,
-                COALESCE(status, 'OPEN')   AS status,
-                request_type,
-                domain,
-                (SELECT address FROM domains d
-                 WHERE d.key = chat_info.domain
-                 ORDER BY d.id LIMIT 1)        AS website,
-                summary,
-                summary_generated_at,
-                summary_notified_at;
+                summary_generated_at = EXCLUDED.summary_generated_at;
             """,
             (session_id, summary),
         )
-        row = cur.fetchone()
     print(f"[PERIODIC_SUMMARY] summary saved for session {session_id}")
-    return row
 
 
 @with_connection
@@ -295,25 +279,15 @@ def mark_summaries_notified(conn, session_ids: List[str]) -> int:
 def find_unnotified_summaries(conn) -> List[Dict[str, Any]]:
     """
     Return chats with a saved summary that was never sent to Slack
-    (summary_notified_at IS NULL), newest first, with no time limit. Rows hold
-    the lead columns from save_summary() plus first_message.
+    (summary_notified_at IS NULL), newest first, with no time limit.
     """
     query = sql.SQL(
         """
         SELECT
             ci.session_id,
             COALESCE(ci.contact_name, '') AS name,
-            COALESCE(ci.email, '')        AS email,
-            COALESCE(ci.mobile, '')       AS mobile,
-            COALESCE(ci.country, '')      AS country,
-            COALESCE(ci.status, 'OPEN')   AS status,
-            ci.request_type,
             ci.domain,
-            (SELECT address FROM domains d
-             WHERE d.key = ci.domain
-             ORDER BY d.id LIMIT 1)       AS website,
             ci.summary,
-            ci.summary_generated_at,
             (SELECT MIN(h.created_at) FROM {table} h
              WHERE h.session_id::text = ci.session_id) AS first_message
         FROM chat_info ci

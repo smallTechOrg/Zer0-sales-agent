@@ -216,10 +216,8 @@ class TestFindUnnotifiedSummaries:
         assert continued not in by_id
         row = by_id[unsent]
         assert row["summary"] == "old summary"
-        assert row["summary_generated_at"] is not None
         assert row["first_message"] is not None
         assert row["name"] == ""
-        assert row["status"] == "OPEN"
 
     def test_row_without_summary_is_not_returned(self, sessions):
         from periodic_summary import find_unnotified_summaries
@@ -290,7 +288,7 @@ class TestSummariseConversation:
 
 
 class TestSaveSummary:
-    def test_updates_existing_lead_and_returns_it(self, sessions):
+    def test_updates_existing_row_and_keeps_contact(self, sessions):
         from periodic_summary import save_summary
 
         recent, _ = sessions
@@ -301,38 +299,18 @@ class TestSaveSummary:
                     (recent, "Ada", "ada@example.com"),
                 )
 
-        row = save_summary(recent, "first")
-        assert row["session_id"] == recent
-        assert row["name"] == "Ada"
-        assert row["email"] == "ada@example.com"
+        save_summary(recent, "first")
+        row = _chat_info_row(recent)
+        assert row["contact_name"] == "Ada"
         assert row["summary"] == "first"
         assert row["summary_generated_at"] is not None
         assert row["summary_notified_at"] is None  # Slack has not been told yet
-        assert row["website"] is None  # no domain on this lead
 
         # Running the job again overwrites the summary and keeps the contact.
-        row = save_summary(recent, "second")
+        save_summary(recent, "second")
+        row = _chat_info_row(recent)
         assert row["summary"] == "second"
-        assert row["name"] == "Ada"
-        assert _chat_info_row(recent)["summary"] == "second"
-
-    def test_resolves_website_from_domain_key(self, sessions):
-        from periodic_summary import save_summary
-
-        recent, _ = sessions
-        with db_pool.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO chat_info (session_id, domain) VALUES (%s, %s);",
-                    (recent, config.DEFAULT_DOMAIN),
-                )
-                cur.execute("SELECT address FROM domains WHERE key = %s ORDER BY id LIMIT 1;",
-                            (config.DEFAULT_DOMAIN,))
-                expected = cur.fetchone()[0]
-
-        row = save_summary(recent, "s")
-        assert row["domain"] == config.DEFAULT_DOMAIN
-        assert row["website"] == expected
+        assert row["contact_name"] == "Ada"
 
     def test_creates_row_when_lead_is_missing(self, sessions):
         from periodic_summary import save_summary
@@ -340,9 +318,7 @@ class TestSaveSummary:
         recent, _ = sessions
         assert _chat_info_row(recent) is None
 
-        row = save_summary(recent, "no lead yet")
-        assert row["name"] == ""
-        assert row["status"] == "OPEN"
+        save_summary(recent, "no lead yet")
         assert _chat_info_row(recent)["summary"] == "no lead yet"
 
 
@@ -383,7 +359,6 @@ class TestPeriodicSummary:
         session = by_id[recent]
         assert len(session["conversation"]) == 2
         assert session["summary"] == "Visitor asked about pricing."
-        assert session["lead"]["session_id"] == recent
         row = _chat_info_row(recent)
         assert row["summary"] == "Visitor asked about pricing."
         # Slack accepted the message, so the session is stamped as notified.
@@ -569,7 +544,6 @@ class TestExtractLlmErrorReason:
         entry = {s["session_id"]: s for s in second["sessions"]}[recent]
         assert entry["resent"] is True
         assert entry["summary"] == "Visitor asked about pricing."
-        assert entry["lead"]["session_id"] == recent
         assert entry["first_message"] is not None
         # Slack saw it and it is stamped, so a third run leaves it alone.
         assert fake_slack[-1]["sessions"] is second["sessions"]

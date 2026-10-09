@@ -23,102 +23,29 @@ TITLE = "Zer0 Chat Summary"
 ERROR_SEPARATOR = "; "
 
 
-def _ordinal(day: int) -> str:
-    if 11 <= day % 100 <= 13:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-    return f"{day}{suffix}"
-
-
-def _localize(value: datetime) -> datetime:
+def send_summaries_to_slack(result: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Put a timestamp in the display timezone. A naive value is taken to be in
-    that timezone already; an aware one (TIMESTAMPTZ from the database) is
-    converted.
+    Send the whole summary. Returns {"sent": n, "skipped": reason?}.
+    Nothing is sent when there are no sessions, only silent sessions, or no
+    webhook. Raises if a post fails, so the caller can record it.
     """
-    tz = ZoneInfo(config.PERIODIC_SUMMARY_TIMEZONE)
-    if value.tzinfo is None:
-        return value.replace(tzinfo=tz)
-    return value.astimezone(tz)
+    if not result.get("sessions"):
+        print("[SLACK] No sessions waiting for a summary. Skipping Slack delivery.")
+        return {"sent": 0, "skipped": "no sessions"}
 
+    if not config.SLACK_WEBHOOK_URL:
+        print("[SLACK] SLACK_WEBHOOK_URL is not set. Skipping Slack delivery.")
+        return {"sent": 0, "skipped": "SLACK_WEBHOOK_URL not set"}
 
-def _clock(value: datetime) -> str:
-    """4:13 pm. Whole hours drop the minutes: 5 pm."""
-    hour = value.strftime("%I").lstrip("0")
-    ampm = value.strftime("%p").lower()
-    if value.minute == 0:
-        return f"{hour} {ampm}"
-    return f"{hour}:{value.minute:02d} {ampm}"
+    messages = build_messages(result)
+    if not messages:
+        print("[SLACK] Only silent sessions in this run. Skipping Slack delivery.")
+        return {"sent": 0, "skipped": "nothing to report"}
 
-
-def format_header_time(value: datetime) -> str:
-    """7th Oct 2026 - 5 pm IST"""
-    value = _localize(value)
-    return f"{_ordinal(value.day)} {value.strftime('%b %Y')} - {_clock(value)} {value.strftime('%Z')}"
-
-
-def format_line_time(value: datetime) -> str:
-    """4:13 pm"""
-    return _clock(_localize(value))
-
-
-def _escape(text: str) -> str:
-    """Slack reads &, < and > as markup in text. Escape them."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
-
-
-def _header(result: Dict[str, Any]) -> str:
-    run_at: Optional[datetime] = result.get("run_at")
-    title = TITLE
-    if isinstance(run_at, datetime):
-        title = f"{TITLE} - {format_header_time(run_at)}"
-    # Slack link syntax: <url|text>. Incoming webhooks render it by default.
-    return f"<{config.DASHBOARD_URL}|{title}>"
-
-
-def _conversation_line(session: Dict[str, Any]) -> str:
-    lead = session.get("lead") or {}
-
-    first = session.get("first_message")
-    when = format_line_time(first) if isinstance(first, datetime) else "unknown time"
-
-    domain = (lead.get("domain") or "UNKNOWN").upper()
-    name = (lead.get("name") or "").strip() or "Unknown"
-
-    if "error" in session:
-        body = f"summary failed ({session['error']})"
-    else:
-        body = (session.get("summary") or "no summary").replace("\n", " ").strip()
-
-    line = f"{when} - {domain} - {_escape(name)} - {_escape(body)}"
-    return _clip(line, LINE_LIMIT)
-
-
-def _llm_failure_line(failed: List[Dict[str, Any]], total: int) -> str:
-    """
-    One sentence for the sessions whose LLM call failed. Distinct errors are
-    listed once each, in the order they were first seen. The count is only
-    shown when the run also had conversations that worked.
-    """
-    errors: List[str] = []
-    for session in failed:
-        error = str(session.get("llm_error") or "unknown error")
-        if error not in errors:
-            errors.append(error)
-
-    if len(failed) == total:
-        what = "Failed to generate a summary."
-    elif len(failed) == 1:
-        what = "Failed to generate a summary for 1 conversation."
-    else:
-        what = f"Failed to generate a summary for {len(failed)} conversations."
-    line = f"{what} LLM calls failed with error: {_escape(ERROR_SEPARATOR.join(errors))}."
-    return _clip(line, LINE_LIMIT)
+    for payload in messages:
+        post_to_slack(payload)
+    print(f"[SLACK] Sent {len(messages)} message(s) to Slack.")
+    return {"sent": len(messages)}
 
 
 def build_messages(result: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -164,26 +91,97 @@ def post_to_slack(payload: Dict[str, Any], webhook_url: str = None) -> None:
         raise RuntimeError(f"Slack webhook returned {response.status_code}: {response.text[:200]}")
 
 
-def send_summaries_to_slack(result: Dict[str, Any]) -> Dict[str, Any]:
+def _header(result: Dict[str, Any]) -> str:
+    run_at: Optional[datetime] = result.get("run_at")
+    title = TITLE
+    if isinstance(run_at, datetime):
+        title = f"{TITLE} - {format_header_time(run_at)}"
+    # Slack link syntax: <url|text>. Incoming webhooks render it by default.
+    return f"<{config.DASHBOARD_URL}|{title}>"
+
+
+def format_header_time(value: datetime) -> str:
+    """7th Oct 2026 - 5 pm IST"""
+    value = _localize(value)
+    return f"{_ordinal(value.day)} {value.strftime('%b %Y')} - {_clock(value)} {value.strftime('%Z')}"
+
+
+def _conversation_line(session: Dict[str, Any]) -> str:
+    first = session.get("first_message")
+    when = format_line_time(first) if isinstance(first, datetime) else "unknown time"
+
+    domain = (session.get("domain") or "UNKNOWN").upper()
+    name = (session.get("name") or "").strip() or "Unknown"
+
+    if "error" in session:
+        body = f"summary failed ({session['error']})"
+    else:
+        body = (session.get("summary") or "no summary").replace("\n", " ").strip()
+
+    line = f"{when} - {domain} - {_escape(name)} - {_escape(body)}"
+    return _clip(line, LINE_LIMIT)
+
+
+def format_line_time(value: datetime) -> str:
+    """4:13 pm"""
+    return _clock(_localize(value))
+
+
+def _llm_failure_line(failed: List[Dict[str, Any]], total: int) -> str:
     """
-    Send the whole summary. Returns {"sent": n, "skipped": reason?}.
-    Nothing is sent when there are no sessions, only silent sessions, or no
-    webhook. Raises if a post fails, so the caller can record it.
+    One sentence for the sessions whose LLM call failed. Distinct errors are
+    listed once each, in the order they were first seen. The count is only
+    shown when the run also had conversations that worked.
     """
-    if not result.get("sessions"):
-        print("[SLACK] No sessions waiting for a summary. Skipping Slack delivery.")
-        return {"sent": 0, "skipped": "no sessions"}
+    errors: List[str] = []
+    for session in failed:
+        error = str(session.get("llm_error") or "unknown error")
+        if error not in errors:
+            errors.append(error)
 
-    if not config.SLACK_WEBHOOK_URL:
-        print("[SLACK] SLACK_WEBHOOK_URL is not set. Skipping Slack delivery.")
-        return {"sent": 0, "skipped": "SLACK_WEBHOOK_URL not set"}
+    if len(failed) == total:
+        what = "Failed to generate a summary."
+    elif len(failed) == 1:
+        what = "Failed to generate a summary for 1 conversation."
+    else:
+        what = f"Failed to generate a summary for {len(failed)} conversations."
+    line = f"{what} LLM calls failed with error: {_escape(ERROR_SEPARATOR.join(errors))}."
+    return _clip(line, LINE_LIMIT)
 
-    messages = build_messages(result)
-    if not messages:
-        print("[SLACK] Only silent sessions in this run. Skipping Slack delivery.")
-        return {"sent": 0, "skipped": "nothing to report"}
 
-    for payload in messages:
-        post_to_slack(payload)
-    print(f"[SLACK] Sent {len(messages)} message(s) to Slack.")
-    return {"sent": len(messages)}
+def _localize(value: datetime) -> datetime:
+    """
+    Put a timestamp in the display timezone. A naive value is taken to be in
+    that timezone already; an aware one (TIMESTAMPTZ from the database) is
+    converted.
+    """
+    tz = ZoneInfo(config.PERIODIC_SUMMARY_TIMEZONE)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=tz)
+    return value.astimezone(tz)
+
+
+def _clock(value: datetime) -> str:
+    """4:13 pm. Whole hours drop the minutes: 5 pm."""
+    hour = value.strftime("%I").lstrip("0")
+    ampm = value.strftime("%p").lower()
+    if value.minute == 0:
+        return f"{hour} {ampm}"
+    return f"{hour}:{value.minute:02d} {ampm}"
+
+
+def _ordinal(day: int) -> str:
+    if 11 <= day % 100 <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
+
+
+def _escape(text: str) -> str:
+    """Slack reads &, < and > as markup in text. Escape them."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
