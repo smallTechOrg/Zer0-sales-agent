@@ -120,7 +120,7 @@ def periodic_summary() -> Dict[str, Any]:
     result["notified_count"] = 0
     if to_stamp:
         try:
-            result["notified_count"] = summary_notified_at(to_stamp)
+            result["notified_count"] = mark_summaries_notified(to_stamp)
         except Exception as exc:
             print(f"[PERIODIC_SUMMARY] could not mark sessions as notified: {exc}")
             print(traceback.format_exc())
@@ -269,7 +269,7 @@ def save_summary(conn, session_id: str, summary: str) -> Optional[Dict[str, Any]
 
 
 @with_connection
-def summary_notified_at(conn, session_ids: List[str]) -> int:
+def mark_summaries_notified(conn, session_ids: List[str]) -> int:
     """
     Set summary_notified_at = NOW() on the given sessions. Called after Slack
     accepted the message that carried their summaries. Returns the number of

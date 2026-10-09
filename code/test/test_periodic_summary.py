@@ -140,7 +140,7 @@ def fake_llm(monkeypatch):
     return calls
 
 
-class TestFindSessions:
+class TestFindChatsNeedingSummary:
     def test_returns_recent_and_skips_stale(self, sessions):
         from periodic_summary import find_chats_needing_summary
 
@@ -231,7 +231,7 @@ class TestFindUnnotifiedSummaries:
         assert recent not in {r["session_id"] for r in find_unnotified_summaries()}
 
 
-class TestFindConversation:
+class TestFetchFullConversationHistory:
     def test_returns_every_message_oldest_first(self, sessions):
         from periodic_summary import fetch_full_conversation_history
 
@@ -346,22 +346,22 @@ class TestSaveSummary:
         assert _chat_info_row(recent)["summary"] == "no lead yet"
 
 
-class TestSummaryNotifiedAt:
+class TestMarkSummariesNotified:
     def test_stamps_only_the_given_sessions(self, sessions):
-        from periodic_summary import summary_notified_at, save_summary
+        from periodic_summary import mark_summaries_notified, save_summary
 
         recent, stale = sessions
         save_summary(recent, "a")
         save_summary(stale, "b")
 
-        assert summary_notified_at([recent]) == 1
+        assert mark_summaries_notified([recent]) == 1
         assert _chat_info_row(recent)["summary_notified_at"] is not None
         assert _chat_info_row(stale)["summary_notified_at"] is None
 
     def test_empty_list_is_a_no_op(self):
-        from periodic_summary import summary_notified_at
+        from periodic_summary import mark_summaries_notified
 
-        assert summary_notified_at([]) == 0
+        assert mark_summaries_notified([]) == 0
 
 
 class TestPeriodicSummary:
@@ -500,7 +500,7 @@ class TestPeriodicSummary:
         assert result["llm_failed_count"] == 0
 
 
-class TestLlmErrorText:
+class TestExtractLlmErrorReason:
     def test_groq_style_body_gives_the_code(self):
         from periodic_summary import extract_llm_error_reason
 
