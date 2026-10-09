@@ -1,11 +1,6 @@
 """
-slack_notify turns a periodic_summary() result into the plain-text message
-
-    <dashboard url|Zer0 Chat Summary - 7th Oct 2026 - 5 pm IST>
-    4:13 pm - SMALLTECH - Anjali - Enquiry for AI training in Bangalore.
-    ...
-
-and POSTs it to the webhook. The HTTP call is stubbed; nothing reaches Slack.
+Tests for formatting a periodic_summary() result as a Slack message.
+The webhook POST is stubbed; nothing reaches Slack.
 """
 import sys
 import os

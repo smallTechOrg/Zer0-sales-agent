@@ -121,11 +121,8 @@ def ensure_summaries_table_exists(sync_connection):
 
         cur.execute("ALTER TABLE chat_info ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
 
-        # Written by periodic_summary: summary and summary_generated_at by
-        # save_summary(), summary_notified_at by the function of the same
-        # name once the summary reached Slack. An older database has the
-        # generated-at column under its first name, summary_updated_at:
-        # rename it so the timestamps already there are kept.
+        # Summary columns written by periodic_summary. Older databases call
+        # summary_generated_at summary_updated_at: rename it to keep the data.
         cur.execute(
             """
             DO $$

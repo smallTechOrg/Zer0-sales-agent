@@ -45,8 +45,7 @@ def create_app() -> Flask:
     CORS(flask_app)
 
     # -- Background jobs -------------------------------------------------------
-    # The periodic summary runs in a thread of this process. One scheduler per
-    # process: see the reloader note in the __main__ block.
+    # The periodic summary runs in a thread of this process.
     start_scheduler()
 
     return flask_app
@@ -59,12 +58,8 @@ def chat_ui():
     return render_template('chat.html')
 
 if __name__ == "__main__":
-    # With debug on, Werkzeug's reloader runs this file twice: a parent that
-    # watches files and a child that serves. create_app() above already
-    # started a scheduler in this process. In the parent, stop it, or the job
-    # runs in both processes and Slack gets every summary twice. The child has
-    # WERKZEUG_RUN_MAIN set and keeps its scheduler. `flask run` (deployment)
-    # has no reloader and is not affected.
+    # In debug, Werkzeug's reloader runs this file in a parent and a child process.
+    # Stop the parent's scheduler so Slack doesn't get every summary twice.
     if DEBUG and not WERKZEUG_RUN_MAIN:
         stop_scheduler()
     app.run(debug=DEBUG, port=PORT)

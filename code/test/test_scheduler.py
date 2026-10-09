@@ -1,7 +1,6 @@
 """
-The scheduler registers the periodic summary job on the configured cron pattern,
-starts once per process, and the job swallows errors so
-the next run still happens. periodic_summary() itself is stubbed here.
+Tests for the scheduler: job registration, one scheduler per process, and errors
+not stopping the next run. periodic_summary() is stubbed.
 """
 import sys
 import os

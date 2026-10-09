@@ -1,14 +1,6 @@
 """
-Background scheduler for the periodic chat summary.
-
-An APScheduler BackgroundScheduler runs in a thread inside the Flask process
-and calls periodic_summary.periodic_summary() on a cron schedule. Settings come
-from config:
-
-    PERIODIC_SUMMARY_CRON      five-field cron pattern, e.g. "0 * * * *"
-    PERIODIC_SUMMARY_TIMEZONE  timezone the pattern is read in
-
-One scheduler per process.
+Background scheduler that runs periodic_summary() in a thread of the Flask process,
+on config.PERIODIC_SUMMARY_CRON in config.PERIODIC_SUMMARY_TIMEZONE.
 """
 import atexit
 import threading

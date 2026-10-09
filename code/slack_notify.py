@@ -1,37 +1,7 @@
 """
-Send the chat summary to a Slack channel through an incoming webhook.
-
-Message format, one plain-text message. The header is a link to the
-dashboard (config.DASHBOARD_URL); the time is when the job ran:
-
-    Zer0 Chat Summary - 7th Oct 2026 - 5 pm IST
-    4:13 pm - SMALLTECH - Anjali - Enquiry for AI training in Bangalore.
-    4:17 pm - ZERO - Rahul - Wants to approach a partnership for small businesses.
-    4:17 pm - SILVERWAVE - Unknown - Just said hi.
-
-Each line: time of the session's first recent message, the domain key, the
-visitor's name (Unknown when none was shared), and the summary. Times are
-shown in config.PERIODIC_SUMMARY_TIMEZONE.
-
-Conversations whose LLM call failed do not get a line. The run reports them
-in one sentence after the lines, so an outage reads as one event:
-
-    Zer0 Chat Summary - 7th Oct 2026 - 6 pm IST
-    Failed to generate a summary. LLM calls failed with error: rate_limit_exceeded.
-
-When only some conversations failed, the sentence says how many, after the
-lines of the ones that worked. Those conversations are not stamped as
-notified, so the next run tries them again.
-
-Silent sessions, where the visitor never wrote (``session["silent"]``), get
-no line: the channel is for conversations. A run with only silent sessions
-sends nothing.
-
-The webhook URL comes from config.SLACK_WEBHOOK_URL. When it is not set the
-sender logs that and does nothing, so the summary job still runs and saves
-its results in development. A run with no sessions waiting for a summary
-sends nothing either: the channel only gets a message when there is
-something to read.
+Post the periodic chat summary to Slack through an incoming webhook.
+One line per conversation ("4:13 pm - SMALLTECH - Anjali - summary"); LLM failures
+become one sentence at the end, and silent sessions are left out.
 """
 from datetime import datetime
 from typing import Any, Dict, List, Optional

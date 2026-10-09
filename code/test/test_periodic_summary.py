@@ -1,16 +1,6 @@
 """
-The periodic summary chain against the real schema. The LLM call is replaced
-with a stub so the tests need no Groq key and are deterministic.
-
-find_chats_needing_summary() must see a session that just wrote a message and still has
-no summary, skip one whose message is older than the window, skip one whose
-summary already reached Slack, see again one that kept talking after its
-summary was written, and leave one whose summary is saved but unsent to
-find_unnotified_summaries(). fetch_full_conversation_history() must return the whole
-session. save_summary() must write to chat_info and return the lead row.
-periodic_summary() must run the chain, keep going when one session fails,
-resend a saved summary after a Slack failure without a new LLM call, and
-leave nothing behind for the next run once Slack accepted the message.
+Tests for the periodic summary chain against the real schema.
+The LLM call is stubbed, so no Groq key is needed.
 """
 import sys
 import os
@@ -96,8 +86,7 @@ def sessions():
 def summarised_sessions():
     """
     done       summarised and sent to Slack after its last message: skipped
-    continued  summarised and sent, then the visitor wrote again: needs a
-               fresh summary
+    continued  summarised and sent, then the visitor wrote again: resummarise
     unsent     summarised, but Slack never got it: needs to go out again
     """
     done = str(uuid.uuid4())

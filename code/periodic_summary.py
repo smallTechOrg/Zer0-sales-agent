@@ -17,16 +17,11 @@ from psycopg.rows import dict_row
 import config
 from db_pool import with_connection
 from slack_notify import send_summaries_to_slack
-from system_prompt import get_prompt
 
-# How far back find_chats_needing_summary() looks for sessions without a summary. The
-# number of days is config.SUMMARY_WINDOW_DAYS (SUMMARY_WINDOW_DAYS in .env).
+# How far back find_chats_needing_summary() looks (SUMMARY_WINDOW_DAYS in .env).
 SUMMARY_WINDOW = timedelta(days=config.SUMMARY_WINDOW_DAYS)
 
-# The prompt lives in the prompts table as (DEFAULT_DOMAIN, sales,
-# periodic-summary) so it can be edited through the prompts API. The file is the
-# fallback for a database that was bootstrapped before that row existed.
-SUMMARY_PROMPT_TYPE = "periodic-summary"
+# Prompt template for the summary; {conversation} is replaced with the transcript.
 SUMMARY_PROMPT_FILE = Path(__file__).parent / "prompts" / "summary_prompt.txt"
 
 # Saved as the summary of a session where the visitor wrote nothing. Shown on
@@ -36,6 +31,101 @@ SILENT_SUMMARY = "Opened the chat but did not write anything."
 # Longest transcript sent to the LLM, in characters. Keeps a very long chat
 # inside the model's context; the summary then covers the most recent part.
 MAX_TRANSCRIPT_CHARS = 20_000
+
+
+def periodic_summary() -> Dict[str, Any]:
+    """
+    Summarise chats that need it and save each summary, add saved summaries
+    that never reached Slack, post all to Slack, and mark the sent ones as
+    notified. One failing session or a Slack failure does not stop the run.
+    """
+    # When this run happened, in the timezone the Slack message is read in.
+    run_at = datetime.now(ZoneInfo(config.PERIODIC_SUMMARY_TIMEZONE))
+
+    sessions = find_chats_needing_summary()
+    print(f"[PERIODIC_SUMMARY] {len(sessions)} session(s) waiting for a summary")
+
+    # One database call at a time, so pooled connections are never nested.
+    for session in sessions:
+        session_id = session["session_id"]
+        try:
+            session["conversation"] = fetch_full_conversation_history(session_id)
+            print(f"[PERIODIC_SUMMARY] session {session_id}: "
+                  f"{len(session['conversation'])} message(s) in full conversation")
+
+            if is_silent(session["conversation"]):
+                session["silent"] = True
+                summary = SILENT_SUMMARY
+            else:
+                try:
+                    summary = summarise_conversation(session["conversation"])
+                except Exception as exc:
+                    session["llm_error"] = extract_llm_error_reason(exc)
+                    raise
+            session["lead"] = save_summary(session_id, summary)
+            session["summary"] = summary
+        except Exception as exc:
+            print(f"[PERIODIC_SUMMARY] session {session_id} failed: {exc}")
+            print(traceback.format_exc())
+            session["error"] = str(exc)
+
+    # Pass two: summaries saved earlier that never reached Slack. A session
+    # pass one touched this run is skipped: it either has a fresher summary
+    # already in the list, or it failed and keeps its old row for next time.
+    resent: List[Dict[str, Any]] = []
+    try:
+        handled = {s["session_id"] for s in sessions}
+        for row in find_unnotified_summaries():
+            if row["session_id"] in handled:
+                continue
+            entry: Dict[str, Any] = {
+                "session_id": row["session_id"],
+                "summary": row["summary"],
+                "first_message": row["first_message"],
+                "lead": row,
+                "resent": True,
+            }
+            if row["summary"] == SILENT_SUMMARY:
+                # A silent session whose stamp failed. Still not for Slack.
+                entry["silent"] = True
+            resent.append(entry)
+    except Exception as exc:
+        print(f"[PERIODIC_SUMMARY] could not look up unsent summaries: {exc}")
+        print(traceback.format_exc())
+    print(f"[PERIODIC_SUMMARY] {len(resent)} saved summary(ies) waiting to be resent")
+
+    all_sessions = sessions + resent
+    result = {
+        "run_at": run_at,
+        "session_count": len(sessions),
+        "summarised_count": sum(1 for s in sessions if "summary" in s),
+        "llm_failed_count": sum(1 for s in sessions if "llm_error" in s),
+        "silent_count": sum(1 for s in sessions if s.get("silent")),
+        "resent_count": len(resent),
+        "sessions": all_sessions,
+    }
+
+    try:
+        result["slack"] = send_summaries_to_slack(result)
+    except Exception as exc:
+        print(f"[PERIODIC_SUMMARY] Slack delivery failed: {exc}")
+        print(traceback.format_exc())
+        result["slack"] = {"sent": 0, "error": str(exc)}
+
+    # Silent sessions are always stamped; others only once Slack accepted them.
+    # Failed sessions have no summary, so they are retried next run.
+    to_stamp = [s["session_id"] for s in all_sessions if "summary" in s and s.get("silent")]
+    if result["slack"].get("sent", 0) > 0:
+        to_stamp += [s["session_id"] for s in all_sessions if "summary" in s and not s.get("silent")]
+    result["notified_count"] = 0
+    if to_stamp:
+        try:
+            result["notified_count"] = summary_notified_at(to_stamp)
+        except Exception as exc:
+            print(f"[PERIODIC_SUMMARY] could not mark sessions as notified: {exc}")
+            print(traceback.format_exc())
+
+    return result
 
 
 @with_connection
@@ -104,9 +194,7 @@ def _format_conversation_transcript(conversation: List[Dict[str, str]]) -> str:
 
 
 def _get_summary_prompt_template() -> str:
-    """The prompt template from the database, or the file if it is not there."""
-    text = get_prompt(config.DEFAULT_DOMAIN, config.agent_type.SALES, SUMMARY_PROMPT_TYPE)
-    return text or SUMMARY_PROMPT_FILE.read_text(encoding="utf-8")
+    return SUMMARY_PROMPT_FILE.read_text(encoding="utf-8")
 
 
 def extract_llm_error_reason(exc: BaseException) -> str:
@@ -237,104 +325,6 @@ def find_unnotified_summaries(conn) -> List[Dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(query)
         return cur.fetchall()
-
-
-def periodic_summary() -> Dict[str, Any]:
-    """
-    Summarise chats that need it and save each summary, add saved summaries
-    that never reached Slack, post all to Slack, and mark the sent ones as
-    notified. One failing session or a Slack failure does not stop the run.
-    """
-    # When this run happened, in the timezone the Slack message is read in.
-    run_at = datetime.now(ZoneInfo(config.PERIODIC_SUMMARY_TIMEZONE))
-
-    sessions = find_chats_needing_summary()
-    print(f"[PERIODIC_SUMMARY] {len(sessions)} session(s) waiting for a summary")
-
-    # One database call at a time. find_chats_needing_summary() has released its connection
-    # by now, so none of these nest two pooled connections.
-    for session in sessions:
-        session_id = session["session_id"]
-        try:
-            session["conversation"] = fetch_full_conversation_history(session_id)
-            print(f"[PERIODIC_SUMMARY] session {session_id}: "
-                  f"{len(session['conversation'])} message(s) in full conversation")
-
-            if is_silent(session["conversation"]):
-                session["silent"] = True
-                summary = SILENT_SUMMARY
-            else:
-                try:
-                    summary = summarise_conversation(session["conversation"])
-                except Exception as exc:
-                    session["llm_error"] = extract_llm_error_reason(exc)
-                    raise
-            session["lead"] = save_summary(session_id, summary)
-            session["summary"] = summary
-        except Exception as exc:
-            print(f"[PERIODIC_SUMMARY] session {session_id} failed: {exc}")
-            print(traceback.format_exc())
-            session["error"] = str(exc)
-
-    # Pass two: summaries saved earlier that never reached Slack. A session
-    # pass one touched this run is skipped: it either has a fresher summary
-    # already in the list, or it failed and keeps its old row for next time.
-    resent: List[Dict[str, Any]] = []
-    try:
-        handled = {s["session_id"] for s in sessions}
-        for row in find_unnotified_summaries():
-            if row["session_id"] in handled:
-                continue
-            entry: Dict[str, Any] = {
-                "session_id": row["session_id"],
-                "summary": row["summary"],
-                "first_message": row["first_message"],
-                "lead": row,
-                "resent": True,
-            }
-            if row["summary"] == SILENT_SUMMARY:
-                # A silent session whose stamp failed. Still not for Slack.
-                entry["silent"] = True
-            resent.append(entry)
-    except Exception as exc:
-        print(f"[PERIODIC_SUMMARY] could not look up unsent summaries: {exc}")
-        print(traceback.format_exc())
-    print(f"[PERIODIC_SUMMARY] {len(resent)} saved summary(ies) waiting to be resent")
-
-    all_sessions = sessions + resent
-    result = {
-        "run_at": run_at,
-        "session_count": len(sessions),
-        "summarised_count": sum(1 for s in sessions if "summary" in s),
-        "llm_failed_count": sum(1 for s in sessions if "llm_error" in s),
-        "silent_count": sum(1 for s in sessions if s.get("silent")),
-        "resent_count": len(resent),
-        "sessions": all_sessions,
-    }
-
-    try:
-        result["slack"] = send_summaries_to_slack(result)
-    except Exception as exc:
-        print(f"[PERIODIC_SUMMARY] Slack delivery failed: {exc}")
-        print(traceback.format_exc())
-        result["slack"] = {"sent": 0, "error": str(exc)}
-
-    # Silent sessions are stamped whatever Slack did: they were never meant
-    # to be sent. Other sessions are stamped only when their summary reached
-    # Slack. Sessions that failed to summarise have no summary, so they stay
-    # unnotified and are tried again next run.
-    to_stamp = [s["session_id"] for s in all_sessions if "summary" in s and s.get("silent")]
-    if result["slack"].get("sent", 0) > 0:
-        to_stamp += [s["session_id"] for s in all_sessions if "summary" in s and not s.get("silent")]
-    result["notified_count"] = 0
-    if to_stamp:
-        try:
-            result["notified_count"] = summary_notified_at(to_stamp)
-        except Exception as exc:
-            print(f"[PERIODIC_SUMMARY] could not mark sessions as notified: {exc}")
-            print(traceback.format_exc())
-
-    return result
 
 
 if __name__ == "__main__":
