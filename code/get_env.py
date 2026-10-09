@@ -31,6 +31,9 @@ GROQ_MODEL_NAME=openai/gpt-oss-120b
 
 # PostgreSQL Database Configuration
 DATABASE_URL={secrets['POSTGRES_URL']}
+
+# Slack
+SLACK_TIMEOUT=10
 """
 
         with open(env_path, "w") as f:

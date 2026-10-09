@@ -45,7 +45,7 @@ def create_app() -> Flask:
     CORS(flask_app)
 
     # -- Background jobs -------------------------------------------------------
-    # The daily summary runs in a thread of this process. One scheduler per
+    # The periodic summary runs in a thread of this process. One scheduler per
     # process: see the reloader note in the __main__ block.
     start_scheduler()
 

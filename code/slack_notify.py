@@ -11,7 +11,7 @@ dashboard (config.DASHBOARD_URL); the time is when the job ran:
 
 Each line: time of the session's first recent message, the domain key, the
 visitor's name (Unknown when none was shared), and the summary. Times are
-shown in config.DAILY_SUMMARY_TIMEZONE.
+shown in config.PERIODIC_SUMMARY_TIMEZONE.
 
 Conversations whose LLM call failed do not get a line. The run reports them
 in one sentence after the lines, so an outage reads as one event:
@@ -67,7 +67,7 @@ def _localize(value: datetime) -> datetime:
     that timezone already; an aware one (TIMESTAMPTZ from the database) is
     converted.
     """
-    tz = ZoneInfo(config.DAILY_SUMMARY_TIMEZONE)
+    tz = ZoneInfo(config.PERIODIC_SUMMARY_TIMEZONE)
     if value.tzinfo is None:
         return value.replace(tzinfo=tz)
     return value.astimezone(tz)
@@ -153,7 +153,7 @@ def _llm_failure_line(failed: List[Dict[str, Any]], total: int) -> str:
 
 def build_messages(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Turn a daily_summary() result into webhook payloads. Normally one; a very
+    Turn a periodic_summary() result into webhook payloads. Normally one; a very
     long run is split, and each part repeats the header. Sessions whose LLM
     call failed become one sentence at the end instead of a line each.
     """

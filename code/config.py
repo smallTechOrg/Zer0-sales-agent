@@ -38,9 +38,9 @@ max_input_length = int(os.getenv("MAX_INPUT_LENGTH", "10000"))
 DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "COMMON")
 
 # ---------------------------------------------------------------------------
-# Slack (daily summary)
+# Slack (periodic summary)
 # ---------------------------------------------------------------------------
-# Incoming webhook for the channel that receives the daily chat summary.
+# Incoming webhook for the channel that receives the periodic chat summary.
 # Unset: the summary job runs and saves to the database, and skips Slack.
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 # Seconds to wait for one webhook POST.
@@ -55,12 +55,12 @@ SUMMARY_WINDOW_DAYS = int(os.getenv("SUMMARY_WINDOW_DAYS", "7"))
 # ---------------------------------------------------------------------------
 # Scheduler (see code/scheduler.py)
 # ---------------------------------------------------------------------------
-# When the daily summary job runs, as a five-field cron pattern
+# When the periodic summary job runs, as a five-field cron pattern
 # (minute hour day month weekday). Default: at the start of every hour.
-DAILY_SUMMARY_CRON = os.getenv("DAILY_SUMMARY_CRON", "0 * * * *")
+PERIODIC_SUMMARY_CRON = os.getenv("PERIODIC_SUMMARY_CRON", "0 * * * *")
 # Timezone the pattern is read in. Without this a server running in UTC
 # would fire at the wrong local time.
-DAILY_SUMMARY_TIMEZONE = os.getenv("DAILY_SUMMARY_TIMEZONE", "Asia/Kolkata")
+PERIODIC_SUMMARY_TIMEZONE = os.getenv("PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
 
 # ---------------------------------------------------------------------------
 # Database

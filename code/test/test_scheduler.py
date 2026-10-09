@@ -1,7 +1,7 @@
 """
-The scheduler registers the daily summary job on the configured cron pattern,
+The scheduler registers the periodic summary job on the configured cron pattern,
 starts once per process, and the job swallows errors so
-the next run still happens. daily_summary() itself is stubbed here.
+the next run still happens. periodic_summary() itself is stubbed here.
 """
 import sys
 import os
@@ -23,15 +23,15 @@ def fresh_scheduler():
 
 class TestStart:
     def test_registers_job_on_configured_cron_pattern(self, monkeypatch):
-        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_CRON", "30 9 * * *")
-        monkeypatch.setattr(scheduler.config, "DAILY_SUMMARY_TIMEZONE", "Asia/Kolkata")
+        monkeypatch.setattr(scheduler.config, "PERIODIC_SUMMARY_CRON", "30 9 * * *")
+        monkeypatch.setattr(scheduler.config, "PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
 
         sched = scheduler.start_scheduler()
 
         assert sched is not None and sched.running
         job = sched.get_job(scheduler.JOB_ID)
         assert job is not None
-        assert job.func is scheduler.run_daily_summary_job
+        assert job.func is scheduler.run_periodic_summary_job
         # The pattern is read in the configured timezone, not the server's.
         assert job.next_run_time.hour == 9
         assert job.next_run_time.minute == 30
@@ -55,22 +55,22 @@ class TestStart:
 
 
 class TestJob:
-    def test_job_calls_daily_summary(self, monkeypatch):
+    def test_job_calls_periodic_summary(self, monkeypatch):
         calls = []
 
-        def fake_daily_summary():
+        def fake_periodic_summary():
             calls.append(True)
             return {"summarised_count": 2, "session_count": 3, "slack": {"sent": 1}}
 
-        monkeypatch.setattr(scheduler, "daily_summary", fake_daily_summary)
-        scheduler.run_daily_summary_job()
+        monkeypatch.setattr(scheduler, "periodic_summary", fake_periodic_summary)
+        scheduler.run_periodic_summary_job()
         assert calls == [True]
 
     def test_job_swallows_errors(self, monkeypatch):
         def boom():
             raise RuntimeError("db down")
 
-        monkeypatch.setattr(scheduler, "daily_summary", boom)
+        monkeypatch.setattr(scheduler, "periodic_summary", boom)
         # Must not raise: APScheduler would log it, and the next run still has
         # to happen either way, but the log line here is ours.
-        scheduler.run_daily_summary_job()
+        scheduler.run_periodic_summary_job()

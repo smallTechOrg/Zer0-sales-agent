@@ -1,12 +1,12 @@
 """
-Background scheduler for the daily chat summary.
+Background scheduler for the periodic chat summary.
 
 An APScheduler BackgroundScheduler runs in a thread inside the Flask process
-and calls daily_summary.daily_summary() on a cron schedule. Settings come
+and calls periodic_summary.periodic_summary() on a cron schedule. Settings come
 from config:
 
-    DAILY_SUMMARY_CRON      five-field cron pattern, e.g. "0 * * * *"
-    DAILY_SUMMARY_TIMEZONE  timezone the pattern is read in
+    PERIODIC_SUMMARY_CRON      five-field cron pattern, e.g. "0 * * * *"
+    PERIODIC_SUMMARY_TIMEZONE  timezone the pattern is read in
 
 One scheduler per process.
 """
@@ -19,36 +19,36 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import config
-from daily_summary import daily_summary
+from periodic_summary import periodic_summary
 
-JOB_ID = "daily_summary"
+JOB_ID = "periodic_summary"
 
 _scheduler: Optional[BackgroundScheduler] = None
 _lock = threading.Lock()
 
 
-def run_daily_summary_job() -> None:
+def run_periodic_summary_job() -> None:
     """
     The scheduled job. Catches everything: an exception inside a job is only
     logged by APScheduler, and the next run must still happen.
     """
-    print("[SCHEDULER] daily summary job started")
+    print("[SCHEDULER] periodic summary job started")
     try:
-        result = daily_summary()
+        result = periodic_summary()
         print(
-            f"[SCHEDULER] daily summary job finished: "
+            f"[SCHEDULER] periodic summary job finished: "
             f"{result['summarised_count']}/{result['session_count']} session(s) summarised, "
             f"{result.get('resent_count', 0)} resent, "
             f"slack={result.get('slack')}"
         )
     except Exception as exc:
-        print(f"[SCHEDULER] daily summary job failed: {exc}")
+        print(f"[SCHEDULER] periodic summary job failed: {exc}")
         print(traceback.format_exc())
 
 
 def start_scheduler() -> BackgroundScheduler:
     """
-    Start the scheduler with the daily summary job. Safe to call more than
+    Start the scheduler with the periodic summary job. Safe to call more than
     once: a second call returns the running scheduler.
     """
     global _scheduler
@@ -59,12 +59,12 @@ def start_scheduler() -> BackgroundScheduler:
 
         scheduler = BackgroundScheduler(daemon=True)
         scheduler.add_job(
-            run_daily_summary_job,
+            run_periodic_summary_job,
             trigger=CronTrigger.from_crontab(
-                config.DAILY_SUMMARY_CRON, timezone=config.DAILY_SUMMARY_TIMEZONE
+                config.PERIODIC_SUMMARY_CRON, timezone=config.PERIODIC_SUMMARY_TIMEZONE
             ),
             id=JOB_ID,
-            name="Daily chat summary",
+            name="Periodic chat summary",
             # A run that is still going when the next one is due: skip the new
             # one instead of running two summaries at the same time.
             max_instances=1,
@@ -78,8 +78,8 @@ def start_scheduler() -> BackgroundScheduler:
 
     job = scheduler.get_job(JOB_ID)
     print(
-        f"[SCHEDULER] Daily summary job scheduled on '{config.DAILY_SUMMARY_CRON}' "
-        f"({config.DAILY_SUMMARY_TIMEZONE}); next run at {job.next_run_time}"
+        f"[SCHEDULER] Periodic summary job scheduled on '{config.PERIODIC_SUMMARY_CRON}' "
+        f"({config.PERIODIC_SUMMARY_TIMEZONE}); next run at {job.next_run_time}"
     )
     return scheduler
 

@@ -1,14 +1,14 @@
 """
-The daily summary chain against the real schema. The LLM call is replaced
+The periodic summary chain against the real schema. The LLM call is replaced
 with a stub so the tests need no Groq key and are deterministic.
 
-find_sessions() must see a session that just wrote a message and still has
+find_chats_needing_summary() must see a session that just wrote a message and still has
 no summary, skip one whose message is older than the window, skip one whose
 summary already reached Slack, see again one that kept talking after its
 summary was written, and leave one whose summary is saved but unsent to
-find_unnotified_summaries(). find_conversation() must return the whole
+find_unnotified_summaries(). fetch_full_conversation_history() must return the whole
 session. save_summary() must write to chat_info and return the lead row.
-daily_summary() must run the chain, keep going when one session fails,
+periodic_summary() must run the chain, keep going when one session fails,
 resend a saved summary after a Slack failure without a new LLM call, and
 leave nothing behind for the next run once Slack accepted the message.
 """
@@ -117,7 +117,7 @@ def summarised_sessions():
 @pytest.fixture(autouse=True)
 def fake_slack(monkeypatch):
     """Never reach Slack from the tests. Records what would have been sent."""
-    import daily_summary
+    import periodic_summary
 
     sent = []
 
@@ -125,14 +125,14 @@ def fake_slack(monkeypatch):
         sent.append(result)
         return {"sent": 1}
 
-    monkeypatch.setattr(daily_summary, "send_summaries_to_slack", fake_send)
+    monkeypatch.setattr(periodic_summary, "send_summaries_to_slack", fake_send)
     return sent
 
 
 @pytest.fixture
 def fake_llm(monkeypatch):
     """Replace the Groq call. Records the prompt it was given."""
-    import daily_summary
+    import periodic_summary
 
     calls = []
 
@@ -147,16 +147,16 @@ def fake_llm(monkeypatch):
             calls.append(messages[0].content)
             return _Response()
 
-    monkeypatch.setattr(daily_summary, "ChatGroq", _FakeChatGroq)
+    monkeypatch.setattr(periodic_summary, "ChatGroq", _FakeChatGroq)
     return calls
 
 
 class TestFindSessions:
     def test_returns_recent_and_skips_stale(self, sessions):
-        from daily_summary import find_sessions
+        from periodic_summary import find_chats_needing_summary
 
         recent, stale = sessions
-        rows = find_sessions()
+        rows = find_chats_needing_summary()
         by_id = {row["session_id"]: row for row in rows}
 
         assert recent in by_id
@@ -165,18 +165,18 @@ class TestFindSessions:
         assert by_id[recent]["first_message"] <= by_id[recent]["last_message"]
 
     def test_window_is_configurable(self, sessions):
-        from daily_summary import find_sessions
+        from periodic_summary import find_chats_needing_summary
 
         recent, stale = sessions
-        ids = {row["session_id"] for row in find_sessions(window=timedelta(days=30))}
+        ids = {row["session_id"] for row in find_chats_needing_summary(window=timedelta(days=30))}
         assert recent in ids
         assert stale in ids
 
     def test_skips_sent_and_unsent_and_keeps_continued(self, summarised_sessions):
-        from daily_summary import find_sessions
+        from periodic_summary import find_chats_needing_summary
 
         done, continued, unsent = summarised_sessions
-        by_id = {row["session_id"]: row for row in find_sessions()}
+        by_id = {row["session_id"]: row for row in find_chats_needing_summary()}
 
         assert done not in by_id
         assert continued in by_id
@@ -186,7 +186,7 @@ class TestFindSessions:
         assert by_id[continued]["message_count"] == 2
 
     def test_returns_chat_details(self, sessions):
-        from daily_summary import find_sessions
+        from periodic_summary import find_chats_needing_summary
 
         recent, _ = sessions
         with db_pool.get_connection() as conn:
@@ -197,7 +197,7 @@ class TestFindSessions:
                     (recent, "Ada", "ada@example.com", config.DEFAULT_DOMAIN),
                 )
 
-        row = {r["session_id"]: r for r in find_sessions()}[recent]
+        row = {r["session_id"]: r for r in find_chats_needing_summary()}[recent]
         assert row["name"] == "Ada"
         assert row["email"] == "ada@example.com"
         assert row["domain"] == config.DEFAULT_DOMAIN
@@ -205,10 +205,10 @@ class TestFindSessions:
         assert row["created_at"] is not None
 
     def test_details_are_empty_without_chat_info_row(self, sessions):
-        from daily_summary import find_sessions
+        from periodic_summary import find_chats_needing_summary
 
         recent, _ = sessions
-        row = {r["session_id"]: r for r in find_sessions()}[recent]
+        row = {r["session_id"]: r for r in find_chats_needing_summary()}[recent]
         assert row["name"] == ""
         assert row["email"] == ""
         assert row["domain"] is None
@@ -217,7 +217,7 @@ class TestFindSessions:
 
 class TestFindUnnotifiedSummaries:
     def test_returns_only_saved_but_unsent(self, summarised_sessions):
-        from daily_summary import find_unnotified_summaries
+        from periodic_summary import find_unnotified_summaries
 
         done, continued, unsent = summarised_sessions
         by_id = {row["session_id"]: row for row in find_unnotified_summaries()}
@@ -233,7 +233,7 @@ class TestFindUnnotifiedSummaries:
         assert row["status"] == "OPEN"
 
     def test_row_without_summary_is_not_returned(self, sessions):
-        from daily_summary import find_unnotified_summaries
+        from periodic_summary import find_unnotified_summaries
 
         recent, _ = sessions
         with db_pool.get_connection() as conn:
@@ -244,27 +244,27 @@ class TestFindUnnotifiedSummaries:
 
 class TestFindConversation:
     def test_returns_every_message_oldest_first(self, sessions):
-        from daily_summary import find_conversation
+        from periodic_summary import fetch_full_conversation_history
 
         recent, stale = sessions
-        conversation = find_conversation(recent)
+        conversation = fetch_full_conversation_history(recent)
         assert [m["type"] for m in conversation] == ["human", "ai"]
         assert conversation[0]["content"] == "hi"
         assert conversation[1]["content"] == "hello"
 
         # A stale session still has its full history; it is only excluded
-        # from find_sessions().
-        assert len(find_conversation(stale)) == 1
+        # from find_chats_needing_summary().
+        assert len(fetch_full_conversation_history(stale)) == 1
 
     def test_unknown_session_is_empty(self):
-        from daily_summary import find_conversation
+        from periodic_summary import fetch_full_conversation_history
 
-        assert find_conversation(str(uuid.uuid4())) == []
+        assert fetch_full_conversation_history(str(uuid.uuid4())) == []
 
 
 class TestSummariseConversation:
     def test_calls_llm_with_transcript_and_strips_reply(self, fake_llm):
-        from daily_summary import summarise_conversation
+        from periodic_summary import summarise_conversation
 
         conversation = [
             {"type": "ai", "content": "Welcome!"},
@@ -280,29 +280,29 @@ class TestSummariseConversation:
         assert "{conversation}" not in prompt
 
     def test_skips_llm_when_visitor_wrote_nothing(self, fake_llm):
-        from daily_summary import summarise_conversation
+        from periodic_summary import summarise_conversation
 
         summary = summarise_conversation([{"type": "ai", "content": "Welcome!"}])
         assert summary == "Opened the chat but did not write anything."
         assert fake_llm == []
 
     def test_long_transcript_is_cut_from_the_front(self, fake_llm):
-        import daily_summary
+        import periodic_summary
 
         old = {"type": "human", "content": "OLD " * 50}
         new = {"type": "human", "content": "NEW " * 50}
         conversation = [old] * 200 + [new]
-        daily_summary.summarise_conversation(conversation)
+        periodic_summary.summarise_conversation(conversation)
 
         prompt = fake_llm[0]
         assert "[earlier messages cut]" in prompt
         assert "NEW" in prompt
-        assert len(prompt) < daily_summary.MAX_TRANSCRIPT_CHARS + 2000
+        assert len(prompt) < periodic_summary.MAX_TRANSCRIPT_CHARS + 2000
 
 
 class TestSaveSummary:
     def test_updates_existing_lead_and_returns_it(self, sessions):
-        from daily_summary import save_summary
+        from periodic_summary import save_summary
 
         recent, _ = sessions
         with db_pool.get_connection() as conn:
@@ -328,7 +328,7 @@ class TestSaveSummary:
         assert _chat_info_row(recent)["summary"] == "second"
 
     def test_resolves_website_from_domain_key(self, sessions):
-        from daily_summary import save_summary
+        from periodic_summary import save_summary
 
         recent, _ = sessions
         with db_pool.get_connection() as conn:
@@ -346,7 +346,7 @@ class TestSaveSummary:
         assert row["website"] == expected
 
     def test_creates_row_when_lead_is_missing(self, sessions):
-        from daily_summary import save_summary
+        from periodic_summary import save_summary
 
         recent, _ = sessions
         assert _chat_info_row(recent) is None
@@ -359,7 +359,7 @@ class TestSaveSummary:
 
 class TestSummaryNotifiedAt:
     def test_stamps_only_the_given_sessions(self, sessions):
-        from daily_summary import summary_notified_at, save_summary
+        from periodic_summary import summary_notified_at, save_summary
 
         recent, stale = sessions
         save_summary(recent, "a")
@@ -370,17 +370,17 @@ class TestSummaryNotifiedAt:
         assert _chat_info_row(stale)["summary_notified_at"] is None
 
     def test_empty_list_is_a_no_op(self):
-        from daily_summary import summary_notified_at
+        from periodic_summary import summary_notified_at
 
         assert summary_notified_at([]) == 0
 
 
-class TestDailySummary:
+class TestPeriodicSummary:
     def test_runs_the_chain_and_saves(self, sessions, fake_llm, fake_slack):
-        from daily_summary import daily_summary
+        from periodic_summary import periodic_summary
 
         recent, _ = sessions
-        result = daily_summary()
+        result = periodic_summary()
 
         assert result["slack"] == {"sent": 1}
         assert len(fake_slack) == 1
@@ -403,13 +403,13 @@ class TestDailySummary:
         assert result["notified_count"] >= 1
 
     def test_second_run_leaves_a_sent_session_alone(self, sessions, fake_llm, fake_slack):
-        from daily_summary import daily_summary
+        from periodic_summary import periodic_summary
 
         recent, _ = sessions
-        daily_summary()
+        periodic_summary()
         calls_after_first = len(fake_llm)
 
-        result = daily_summary()
+        result = periodic_summary()
 
         ids = {s["session_id"] for s in result["sessions"]}
         assert recent not in ids
@@ -417,37 +417,37 @@ class TestDailySummary:
         assert len(fake_llm) == calls_after_first
 
     def test_failed_session_is_found_again_next_run(self, sessions, fake_llm, fake_slack, monkeypatch):
-        import daily_summary
+        import periodic_summary
 
         recent, _ = sessions
-        real_summarise = daily_summary.summarise_conversation
+        real_summarise = periodic_summary.summarise_conversation
 
         def boom(conversation):
             raise RuntimeError("llm down")
 
-        monkeypatch.setattr(daily_summary, "summarise_conversation", boom)
-        first = daily_summary.daily_summary()
+        monkeypatch.setattr(periodic_summary, "summarise_conversation", boom)
+        first = periodic_summary.periodic_summary()
         assert "error" in {s["session_id"]: s for s in first["sessions"]}[recent]
         # Nothing was saved, so nothing was stamped.
         assert _chat_info_row(recent) is None
 
-        monkeypatch.setattr(daily_summary, "summarise_conversation", real_summarise)
-        second = daily_summary.daily_summary()
+        monkeypatch.setattr(periodic_summary, "summarise_conversation", real_summarise)
+        second = periodic_summary.periodic_summary()
 
         by_id = {s["session_id"]: s for s in second["sessions"]}
         assert by_id[recent]["summary"] == "Visitor asked about pricing."
         assert _chat_info_row(recent)["summary_notified_at"] is not None
 
     def test_one_failure_does_not_stop_the_job(self, sessions, monkeypatch):
-        import daily_summary
+        import periodic_summary
 
         recent, _ = sessions
 
         def boom(conversation):
             raise RuntimeError("llm down")
 
-        monkeypatch.setattr(daily_summary, "summarise_conversation", boom)
-        result = daily_summary.daily_summary()
+        monkeypatch.setattr(periodic_summary, "summarise_conversation", boom)
+        result = periodic_summary.periodic_summary()
 
         by_id = {s["session_id"]: s for s in result["sessions"]}
         assert by_id[recent]["error"] == "llm down"
@@ -458,35 +458,35 @@ class TestDailySummary:
         assert _chat_info_row(recent) is None
 
     def test_silent_session_is_saved_stamped_and_not_sent(self, fake_llm, monkeypatch):
-        import daily_summary
+        import periodic_summary
 
         silent = str(uuid.uuid4())
         _insert_message(silent, timedelta(minutes=5), msg_type="ai", content="Welcome!")
         # Slack has nothing to send for this run, so it reports a skip.
-        monkeypatch.setattr(daily_summary, "send_summaries_to_slack",
+        monkeypatch.setattr(periodic_summary, "send_summaries_to_slack",
                             lambda result: {"sent": 0, "skipped": "nothing to report"})
         try:
-            result = daily_summary.daily_summary()
+            result = periodic_summary.periodic_summary()
 
             session = {s["session_id"]: s for s in result["sessions"]}[silent]
             assert session["silent"] is True
-            assert session["summary"] == daily_summary.SILENT_SUMMARY
+            assert session["summary"] == periodic_summary.SILENT_SUMMARY
             assert fake_llm == []
             assert result["silent_count"] == 1
             # Stamped even though nothing reached Slack.
             row = _chat_info_row(silent)
-            assert row["summary"] == daily_summary.SILENT_SUMMARY
+            assert row["summary"] == periodic_summary.SILENT_SUMMARY
             assert row["summary_notified_at"] is not None
             assert result["notified_count"] == 1
 
             # Not selected again.
-            assert silent not in {r["session_id"] for r in daily_summary.find_sessions()}
+            assert silent not in {r["session_id"] for r in periodic_summary.find_chats_needing_summary()}
 
             # The visitor comes back and writes: the session is selected
             # again and gets a real summary this time.
             _insert_message(silent, timedelta(seconds=0), content="hello, pricing?")
-            monkeypatch.setattr(daily_summary, "send_summaries_to_slack", lambda result: {"sent": 1})
-            second = daily_summary.daily_summary()
+            monkeypatch.setattr(periodic_summary, "send_summaries_to_slack", lambda result: {"sent": 1})
+            second = periodic_summary.periodic_summary()
             session = {s["session_id"]: s for s in second["sessions"]}[silent]
             assert "silent" not in session
             assert session["summary"] == "Visitor asked about pricing."
@@ -495,15 +495,15 @@ class TestDailySummary:
             _cleanup([silent])
 
     def test_save_failure_is_not_an_llm_error(self, sessions, fake_llm, monkeypatch):
-        import daily_summary
+        import periodic_summary
 
         recent, _ = sessions
 
         def boom(session_id, summary):
             raise RuntimeError("db down")
 
-        monkeypatch.setattr(daily_summary, "save_summary", boom)
-        result = daily_summary.daily_summary()
+        monkeypatch.setattr(periodic_summary, "save_summary", boom)
+        result = periodic_summary.periodic_summary()
 
         session = {s["session_id"]: s for s in result["sessions"]}[recent]
         assert session["error"] == "db down"
@@ -513,37 +513,37 @@ class TestDailySummary:
 
 class TestLlmErrorText:
     def test_groq_style_body_gives_the_code(self):
-        from daily_summary import llm_error_text
+        from periodic_summary import extract_llm_error_reason
 
         exc = RuntimeError("Error code: 429 - {...}")
         exc.body = {"error": {"code": "rate_limit_exceeded", "message": "Rate limit reached"}}
-        assert llm_error_text(exc) == "rate_limit_exceeded"
+        assert extract_llm_error_reason(exc) == "rate_limit_exceeded"
 
     def test_body_without_code_falls_back_to_type_then_message(self):
-        from daily_summary import llm_error_text
+        from periodic_summary import extract_llm_error_reason
 
         exc = RuntimeError("x")
         exc.body = {"error": {"message": "Service unavailable"}}
-        assert llm_error_text(exc) == "Service unavailable"
+        assert extract_llm_error_reason(exc) == "Service unavailable"
 
     def test_plain_exception_gives_its_text(self):
-        from daily_summary import llm_error_text
+        from periodic_summary import extract_llm_error_reason
 
-        assert llm_error_text(RuntimeError("llm down")) == "llm down"
+        assert extract_llm_error_reason(RuntimeError("llm down")) == "llm down"
 
     def test_empty_message_gives_the_class_name(self):
-        from daily_summary import llm_error_text
+        from periodic_summary import extract_llm_error_reason
 
-        assert llm_error_text(TimeoutError()) == "TimeoutError"
+        assert extract_llm_error_reason(TimeoutError()) == "TimeoutError"
 
     def test_slack_failure_is_recorded_not_raised(self, sessions, fake_llm, monkeypatch):
-        import daily_summary
+        import periodic_summary
 
         def boom(result):
             raise RuntimeError("webhook 500")
 
-        monkeypatch.setattr(daily_summary, "send_summaries_to_slack", boom)
-        result = daily_summary.daily_summary()
+        monkeypatch.setattr(periodic_summary, "send_summaries_to_slack", boom)
+        result = periodic_summary.periodic_summary()
 
         assert result["slack"] == {"sent": 0, "error": "webhook 500"}
         assert result["notified_count"] == 0
@@ -554,23 +554,23 @@ class TestLlmErrorText:
         assert row["summary_notified_at"] is None
 
     def test_unsent_summary_is_resent_without_llm(self, sessions, fake_llm, fake_slack, monkeypatch):
-        import daily_summary
+        import periodic_summary
 
         recent, _ = sessions
 
         def boom(result):
             raise RuntimeError("webhook 500")
 
-        monkeypatch.setattr(daily_summary, "send_summaries_to_slack", boom)
-        first = daily_summary.daily_summary()
+        monkeypatch.setattr(periodic_summary, "send_summaries_to_slack", boom)
+        first = periodic_summary.periodic_summary()
         assert first["resent_count"] == 0
         assert _chat_info_row(recent)["summary_notified_at"] is None
         llm_calls = len(fake_llm)
 
         # Slack is back. The saved summary goes out; the LLM is not asked again.
-        monkeypatch.setattr(daily_summary, "send_summaries_to_slack",
+        monkeypatch.setattr(periodic_summary, "send_summaries_to_slack",
                             lambda result: fake_slack.append(result) or {"sent": 1})
-        second = daily_summary.daily_summary()
+        second = periodic_summary.periodic_summary()
 
         assert len(fake_llm) == llm_calls
         # Not re-summarised by pass one: only present as a resend entry.
@@ -585,15 +585,15 @@ class TestLlmErrorText:
         # Slack saw it and it is stamped, so a third run leaves it alone.
         assert fake_slack[-1]["sessions"] is second["sessions"]
         assert _chat_info_row(recent)["summary_notified_at"] is not None
-        third = daily_summary.daily_summary()
+        third = periodic_summary.periodic_summary()
         assert recent not in {s["session_id"] for s in third["sessions"]}
 
     def test_nothing_to_send_marks_nothing(self, sessions, fake_llm, monkeypatch):
-        import daily_summary
+        import periodic_summary
 
-        monkeypatch.setattr(daily_summary, "send_summaries_to_slack",
+        monkeypatch.setattr(periodic_summary, "send_summaries_to_slack",
                             lambda result: {"sent": 0, "skipped": "SLACK_WEBHOOK_URL not set"})
-        result = daily_summary.daily_summary()
+        result = periodic_summary.periodic_summary()
 
         assert result["notified_count"] == 0
         assert _chat_info_row(sessions[0])["summary_notified_at"] is None

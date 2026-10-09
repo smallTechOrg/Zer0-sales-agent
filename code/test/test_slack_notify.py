@@ -1,5 +1,5 @@
 """
-slack_notify turns a daily_summary() result into the plain-text message
+slack_notify turns a periodic_summary() result into the plain-text message
 
     <dashboard url|Zer0 Chat Summary - 7th Oct 2026 - 5 pm IST>
     4:13 pm - SMALLTECH - Anjali - Enquiry for AI training in Bangalore.
@@ -20,13 +20,13 @@ import slack_notify  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 RUN_AT = datetime(2026, 10, 7, 17, 0, tzinfo=IST)
-DASHBOARD = "https://zero.smalltech.in/dashboard?h=khuljasimsim"
+DASHBOARD = "https://zero.smalltech.in/dashboard?h=test-secret"
 HEADER = f"<{DASHBOARD}|Zer0 Chat Summary - 7th Oct 2026 - 5 pm IST>"
 
 
 @pytest.fixture(autouse=True)
 def fixed_config(monkeypatch):
-    monkeypatch.setattr(slack_notify.config, "DAILY_SUMMARY_TIMEZONE", "Asia/Kolkata")
+    monkeypatch.setattr(slack_notify.config, "PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
     monkeypatch.setattr(slack_notify.config, "DASHBOARD_URL", DASHBOARD)
 
 
