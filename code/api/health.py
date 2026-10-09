@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify
 
-from db import missing_tables
-from db_pool import pool_status
+import config
+from db_pool import get_connection, get_pool
 
 health_bp = Blueprint("health", __name__)
 
@@ -9,9 +9,12 @@ health_bp = Blueprint("health", __name__)
 @health_bp.route("/health", methods=["GET"])
 def health():
     """
-    Report the state of the app and the database. The probe uses the same pool
-    as the other endpoints, and asks for the tables the API needs. SELECT 1
-    alone passes on a database with no schema, while every data endpoint fails.
+    Report the state of the app and the database. The probe borrows from the
+    same pool as every other endpoint, so a green check means the API can
+    reach the database. One attempt and a short timeout keep it fast.
+
+    Schema state is not reported here. Creating and migrating tables is the
+    deployment's job, not something a liveness probe should discover.
     """
     status = {
         "message": "Hello World",
@@ -19,18 +22,19 @@ def health():
     }
 
     try:
-        absent = missing_tables()
+        with get_connection(attempts=1, timeout=config.DB_HEALTH_TIMEOUT) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
         status["database"] = "connected"
-        status["pool"] = pool_status()
-        if absent:
-            status["schema_error"] = f"missing tables: {', '.join(absent)}"
-            return jsonify(status), 503
+        code = 200
     except Exception as e:
         status["database_error"] = str(e)
-        try:
-            status["pool"] = pool_status()
-        except Exception:
-            pass
-        return jsonify(status), 503
+        code = 503
 
-    return jsonify(status), 200
+    try:
+        status["pool"] = get_pool().get_stats()
+    except Exception:  # the pool could not even be built
+        pass
+
+    return jsonify(status), code

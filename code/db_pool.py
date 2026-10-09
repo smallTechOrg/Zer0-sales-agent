@@ -74,7 +74,8 @@ def _build_pool() -> ConnectionPool:
         max_lifetime=config.DB_POOL_MAX_LIFETIME,
         reconnect_timeout=config.DB_RECONNECT_TIMEOUT,
         reconnect_failed=_on_reconnect_failed,
-        # Test the connection first. Replace a connection that a restart killed.
+        # Test the connection on checkout, and replace one that a restart
+        # killed. This is how the pool recovers: no timer polls it.
         check=ConnectionPool.check_connection,
         kwargs={
             "connect_timeout": config.DB_CONNECT_TIMEOUT,
@@ -98,33 +99,11 @@ def _build_pool() -> ConnectionPool:
     # wait=False: the app must start when the database is down. /health then
     # reports the fault.
     pool.open(wait=False)
-    if config.DB_CHECK_INTERVAL > 0:
-        threading.Thread(
-            target=_check_pool_forever,
-            args=(pool, config.DB_CHECK_INTERVAL),
-            name="db-pool-check",
-            daemon=True,
-        ).start()
     print(
         f"Database pool opened (min={config.DB_POOL_MIN_SIZE} max={config.DB_POOL_MAX_SIZE} "
         f"timeout={config.DB_POOL_TIMEOUT}s)"
     )
     return pool
-
-
-def _check_pool_forever(pool: ConnectionPool, interval: float) -> None:
-    """
-    Test the pooled connections on a timer. A database restart closes them all,
-    and without this the pool waits for the next request to find out.
-    """
-    while not pool.closed:
-        time.sleep(interval)
-        if pool.closed:
-            return
-        try:
-            pool.check()
-        except Exception as exc:
-            print(f"Pool check failed: {exc}")
 
 
 def get_pool() -> ConnectionPool:
@@ -175,19 +154,6 @@ try:
     signal.signal(signal.SIGTERM, _handle_sigterm)
 except (ValueError, OSError):  # pragma: no cover - not the main thread
     pass
-
-
-def pool_status() -> dict:
-    """Pool counters, for the health endpoint."""
-    stats = get_pool().get_stats()
-    return {
-        "min_size": stats.get("pool_min"),
-        "max_size": stats.get("pool_max"),
-        "size": stats.get("pool_size"),
-        "available": stats.get("pool_available"),
-        "waiting": stats.get("requests_waiting"),
-        "connections_lost": stats.get("connections_lost", 0),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -349,22 +315,3 @@ def with_connection(fn: Callable[..., T]) -> Callable[..., T]:
 
     return wrapper
 
-
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
-
-def ping() -> None:
-    """
-    Test the database through the pool. Raise on failure. One attempt and a
-    short timeout keep the probe fast.
-    """
-
-    def _select_one(conn: psycopg.Connection) -> None:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-
-    run_with_retry(
-        _select_one, attempts=1, timeout=config.DB_HEALTH_TIMEOUT, label="health check"
-    )

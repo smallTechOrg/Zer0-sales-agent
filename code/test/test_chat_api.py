@@ -16,6 +16,7 @@ import os
 import uuid
 from unittest.mock import patch
 
+import psycopg
 import pytest
 from psycopg.rows import dict_row
 
@@ -136,24 +137,27 @@ class TestMalformedRequests:
 # /health
 # ---------------------------------------------------------------------------
 
-class TestHealthSeesTheSchema:
+class TestHealthReportsThePool:
     """
-    SELECT 1 touches no table, so it passes against a database with no schema
-    while every data endpoint returns 500. The probe asks for the tables.
+    /health borrows from the same pool as the API and reports that pool. It
+    does not check the schema: creating tables is the deployment's job.
     """
 
-    def test_a_missing_table_is_a_503(self, client):
-        with patch("api.health.missing_tables", return_value=["prompts"]):
+    def test_a_reachable_database_is_a_200(self, client):
+        response = client.get("/health")
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["database"] == "connected"
+        assert "pool_size" in body["pool"]
+
+    def test_an_unreachable_database_is_a_503(self, client):
+        outage = psycopg.OperationalError("connection refused")
+        with patch("api.health.get_connection", side_effect=outage):
             response = client.get("/health")
         assert response.status_code == 503
         body = response.get_json()
-        assert body["database"] == "connected"
-        assert "prompts" in body["schema_error"]
-
-    def test_a_complete_schema_is_a_200(self, client):
-        response = client.get("/health")
-        assert response.status_code == 200
-        assert "schema_error" not in response.get_json()
+        assert body["database"] == "disconnected"
+        assert "connection refused" in body["database_error"]
 
 
 # ---------------------------------------------------------------------------
