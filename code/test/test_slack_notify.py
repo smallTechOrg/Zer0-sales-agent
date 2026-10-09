@@ -80,9 +80,9 @@ class TestFormatTime:
         assert slack_notify.format_header_time(value) == expected
 
     @pytest.mark.parametrize("value, expected", [
-        (datetime(2026, 10, 7, 16, 13, tzinfo=IST), "4:13 pm"),
-        (datetime(2026, 10, 7, 16, 0, tzinfo=IST), "4 pm"),
-        (datetime(2026, 10, 7, 0, 7, tzinfo=IST), "12:07 am"),
+        (datetime(2026, 10, 7, 16, 13, tzinfo=IST), "7th Oct, 4:13 pm"),
+        (datetime(2026, 10, 7, 16, 0, tzinfo=IST), "7th Oct, 4 pm"),
+        (datetime(2026, 10, 7, 0, 7, tzinfo=IST), "7th Oct, 12:07 am"),
     ])
     def test_line_time(self, value, expected):
         assert slack_notify.format_line_time(value) == expected
@@ -90,7 +90,7 @@ class TestFormatTime:
     def test_database_utc_timestamp_is_shown_in_ist(self):
         # 10:43 UTC is 4:13 pm in Kolkata.
         utc = datetime(2026, 10, 7, 10, 43, tzinfo=timezone.utc)
-        assert slack_notify.format_line_time(utc) == "4:13 pm"
+        assert slack_notify.format_line_time(utc) == "7th Oct, 4:13 pm"
 
     def test_naive_timestamp_is_taken_as_display_timezone(self):
         assert slack_notify.format_header_time(datetime(2026, 10, 7, 17, 0)) == "7th Oct 2026 - 5 pm IST"
@@ -105,8 +105,8 @@ class TestBuildMessages:
         assert message == {
             "text": (
                 f"{HEADER}\n"
-                "4:11 pm - SMALLTECH - Lead 1 - Summary 1.\n"
-                "4:12 pm - SMALLTECH - Lead 2 - Summary 2."
+                "7th Oct, 4:11 pm - SMALLTECH - Lead 1 - Summary 1.\n"
+                "7th Oct, 4:12 pm - SMALLTECH - Lead 2 - Summary 2."
             )
         }
 
@@ -127,19 +127,19 @@ class TestBuildMessages:
         no_lead = _session(3, name=None, domain=None)
         [message] = slack_notify.build_messages(_result([blank, none, no_lead]))
         lines = message["text"].split("\n")[1:]
-        assert lines[0] == "4:11 pm - SMALLTECH - Unknown - Summary 1."
-        assert lines[1] == "4:12 pm - SMALLTECH - Unknown - Summary 2."
-        assert lines[2] == "4:13 pm - UNKNOWN - Unknown - Summary 3."
+        assert lines[0] == "7th Oct, 4:11 pm - SMALLTECH - Unknown - Summary 1."
+        assert lines[1] == "7th Oct, 4:12 pm - SMALLTECH - Unknown - Summary 2."
+        assert lines[2] == "7th Oct, 4:13 pm - UNKNOWN - Unknown - Summary 3."
 
     def test_domain_key_is_upper_cased(self):
         s = _session(1)
         s["domain"] = "silverwave"
         [message] = slack_notify.build_messages(_result([s]))
-        assert "4:11 pm - SILVERWAVE - Lead 1 - Summary 1." in message["text"]
+        assert "7th Oct, 4:11 pm - SILVERWAVE - Lead 1 - Summary 1." in message["text"]
 
     def test_multiline_summary_is_flattened(self):
         [message] = slack_notify.build_messages(_result([_session(1, summary="Line one.\nLine two.")]))
-        assert "4:11 pm - SMALLTECH - Lead 1 - Line one. Line two." in message["text"]
+        assert "7th Oct, 4:11 pm - SMALLTECH - Lead 1 - Line one. Line two." in message["text"]
 
     def test_failed_session_shows_the_error(self):
         # A failure that was not the LLM (saving the summary, say) keeps its
@@ -148,12 +148,12 @@ class TestBuildMessages:
         del session["summary"]
         session["error"] = "db down"
         [message] = slack_notify.build_messages(_result([session]))
-        assert "4:11 pm - SMALLTECH - Lead 1 - summary failed (db down)" in message["text"]
+        assert "7th Oct, 4:11 pm - SMALLTECH - Lead 1 - summary failed (db down)" in message["text"]
 
     def test_silent_session_gets_no_line(self):
         silent = _session(2, silent=True, summary="Opened the chat but did not write anything.")
         [message] = slack_notify.build_messages(_result([_session(1), silent]))
-        assert message == {"text": f"{HEADER}\n4:11 pm - SMALLTECH - Lead 1 - Summary 1."}
+        assert message == {"text": f"{HEADER}\n7th Oct, 4:11 pm - SMALLTECH - Lead 1 - Summary 1."}
 
     def test_only_silent_sessions_give_no_messages(self):
         silent = _session(1, silent=True, summary="Opened the chat but did not write anything.")
@@ -196,7 +196,7 @@ class TestBuildMessages:
         [message] = slack_notify.build_messages(_result([_session(1), bad, worse]))
         assert message["text"] == (
             f"{HEADER}\n"
-            "4:11 pm - SMALLTECH - Lead 1 - Summary 1.\n"
+            "7th Oct, 4:11 pm - SMALLTECH - Lead 1 - Summary 1.\n"
             "Failed to generate a summary for 2 conversations. "
             "LLM calls failed with error: rate_limit_exceeded."
         )

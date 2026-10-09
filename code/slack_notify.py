@@ -1,6 +1,6 @@
 """
 Post the periodic chat summary to Slack through an incoming webhook.
-One line per conversation ("4:13 pm - SMALLTECH - Anjali - summary"); LLM failures
+One line per conversation ("7th Oct, 4:13 pm - SMALLTECH - Anjali - summary"); LLM failures
 become one sentence at the end, and silent sessions are left out.
 """
 from datetime import datetime
@@ -123,8 +123,9 @@ def _conversation_line(session: Dict[str, Any]) -> str:
 
 
 def format_line_time(value: datetime) -> str:
-    """4:13 pm"""
-    return _clock(_localize(value))
+    """7th Oct, 4:13 pm"""
+    value = _localize(value)
+    return f"{_ordinal(value.day)} {value.strftime('%b')}, {_clock(value)}"
 
 
 def _llm_failure_line(failed: List[Dict[str, Any]], total: int) -> str:
