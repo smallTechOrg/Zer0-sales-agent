@@ -300,13 +300,3 @@ def find_unnotified_summaries(conn) -> List[Dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(query)
         return cur.fetchall()
-
-
-if __name__ == "__main__":
-    import json
-
-    from logging_setup import configure_logging
-
-    configure_logging()
-    # The result goes to stdout as the script's output, not as a log line.
-    print(json.dumps(periodic_summary(), indent=2, default=str))
