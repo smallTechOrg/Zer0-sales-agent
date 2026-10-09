@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import atexit
 import functools
+import logging
 import signal
-import traceback
 import threading
 import time
 from contextlib import contextmanager
@@ -18,6 +18,8 @@ import psycopg
 from psycopg_pool import ConnectionPool
 
 import config
+
+log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -57,10 +59,11 @@ _pool_lock = threading.Lock()
 
 def _on_reconnect_failed(pool: ConnectionPool) -> None:
     """Report a long outage. Do not fail without a message."""
-    print(
-        f"Pool {pool.name!r} could not reconnect within {config.DB_RECONNECT_TIMEOUT}s. "
-        "The app stays up and keeps retrying; /health reports the database as "
-        "down until it succeeds."
+    log.error(
+        "Pool %r could not reconnect within %ss. The app stays up and keeps "
+        "retrying; /health reports the database as down until it succeeds.",
+        pool.name,
+        config.DB_RECONNECT_TIMEOUT,
     )
 
 
@@ -99,9 +102,11 @@ def _build_pool() -> ConnectionPool:
     # wait=False: the app must start when the database is down. /health then
     # reports the fault.
     pool.open(wait=False)
-    print(
-        f"Database pool opened (min={config.DB_POOL_MIN_SIZE} max={config.DB_POOL_MAX_SIZE} "
-        f"timeout={config.DB_POOL_TIMEOUT}s)"
+    log.info(
+        "Database pool opened (min=%s max=%s timeout=%ss)",
+        config.DB_POOL_MIN_SIZE,
+        config.DB_POOL_MAX_SIZE,
+        config.DB_POOL_TIMEOUT,
     )
     return pool
 
@@ -129,7 +134,7 @@ def close_pool() -> None:
     pool = _take_pool()
     if pool is not None:
         pool.close()
-        print("Database pool closed")
+        log.info("Database pool closed")
 
 
 def _close_pool_at_exit() -> None:
@@ -174,14 +179,15 @@ def _track_borrow_depth() -> Iterator[None]:
     _borrow_depth.value = depth
     max_borrow_depth_seen = max(max_borrow_depth_seen, depth)
     if depth > 1:
-        print(
-            f"Nested database connection (depth {depth}) in thread "
-            f"{threading.current_thread().name!r}. With "
-            f"max_size={config.DB_POOL_MAX_SIZE} this risks deadlocking under "
-            "concurrency: finish the outer query and release before borrowing "
-            "again."
+        log.warning(
+            "Nested database connection (depth %d) in thread %r. With "
+            "max_size=%s this risks deadlocking under concurrency: finish the "
+            "outer query and release before borrowing again.",
+            depth,
+            threading.current_thread().name,
+            config.DB_POOL_MAX_SIZE,
+            stack_info=True,
         )
-        print("".join(traceback.format_stack()))
     try:
         yield
     finally:
@@ -214,9 +220,12 @@ def _getconn_with_retry(
             last_error = exc
             if attempt == attempts:
                 break
-            print(
-                f"Database unreachable (attempt {attempt}/{attempts}): {exc} "
-                f"-- retrying in {delay:.1f}s"
+            log.warning(
+                "Database unreachable (attempt %d/%d): %s -- retrying in %.1fs",
+                attempt,
+                attempts,
+                exc,
+                delay,
             )
             time.sleep(delay)
             delay = min(delay * 2, config.DB_RETRY_MAX_DELAY)
@@ -287,9 +296,14 @@ def run_with_retry(
             last_error = exc
             if attempt == attempts:
                 break
-            print(
-                f"{what} failed on a lost connection (attempt {attempt}/"
-                f"{attempts}): {exc} -- retrying in {delay:.1f}s"
+            log.warning(
+                "%s failed on a lost connection (attempt %d/%d): %s -- "
+                "retrying in %.1fs",
+                what,
+                attempt,
+                attempts,
+                exc,
+                delay,
             )
             time.sleep(delay)
             delay = min(delay * 2, config.DB_RETRY_MAX_DELAY)

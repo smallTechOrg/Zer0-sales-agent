@@ -15,9 +15,20 @@ source venv/bin/activate
 
 cd code
 
-echo "Cleaning old .env and Flask logs..."
+echo "Cleaning old .env..."
 rm -f .env
-rm -f flask.log
+
+# Keep flask.log across deploys. Every deploy is a VM reboot, so deleting it
+# here erased the only record of why the previous run died, right when
+# someone was redeploying to recover. Rotate on size instead: one
+# generation, so the pair cannot exceed roughly 100M on a 10G disk.
+# flask.log* is gitignored -- update_app.sh runs `git clean -fd` before this
+# script, which would otherwise delete the rotated copy.
+LOG_MAX_BYTES=52428800
+if [ -f flask.log ] && [ "$(stat -c %s flask.log)" -gt "$LOG_MAX_BYTES" ]; then
+    echo "flask.log over $LOG_MAX_BYTES bytes; rotating to flask.log.1"
+    mv -f flask.log flask.log.1
+fi
 
 echo "Installing dependencies..."
 pip install -r requirements.txt
@@ -67,7 +78,8 @@ fi
 echo "Starting Flask app..."
 cd /opt/ai-agent-boilerplate/code
 export FLASK_APP=app.py
-nohup flask run --host=0.0.0.0 --port=5000 > flask.log 2>&1 &
+echo "==== $(date -Is): deploy, starting Flask ====" >> flask.log
+nohup flask run --host=0.0.0.0 --port=5000 >> flask.log 2>&1 &
 echo $! > zero.pid
 
 # Make sure the app answers before you report success. nohup always succeeds.

@@ -3,8 +3,8 @@ Background scheduler that runs periodic_summary() in a thread of the Flask proce
 on config.PERIODIC_SUMMARY_CRON in config.PERIODIC_SUMMARY_TIMEZONE.
 """
 import atexit
+import logging
 import threading
-import traceback
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,6 +12,8 @@ from apscheduler.triggers.cron import CronTrigger
 
 import config
 from periodic_summary import periodic_summary
+
+log = logging.getLogger(__name__)
 
 JOB_ID = "periodic_summary"
 
@@ -50,9 +52,11 @@ def start_scheduler() -> BackgroundScheduler:
         _scheduler = scheduler
 
     job = scheduler.get_job(JOB_ID)
-    print(
-        f"[SCHEDULER] Periodic summary job scheduled on '{config.PERIODIC_SUMMARY_CRON}' "
-        f"({config.PERIODIC_SUMMARY_TIMEZONE}); next run at {job.next_run_time}"
+    log.info(
+        "Periodic summary job scheduled on '%s' (%s); next run at %s",
+        config.PERIODIC_SUMMARY_CRON,
+        config.PERIODIC_SUMMARY_TIMEZONE,
+        job.next_run_time,
     )
     return scheduler
 
@@ -62,18 +66,19 @@ def run_periodic_summary_job() -> None:
     The scheduled job. Catches everything: an exception inside a job is only
     logged by APScheduler, and the next run must still happen.
     """
-    print("[SCHEDULER] periodic summary job started")
+    log.info("periodic summary job started")
     try:
         result = periodic_summary()
-        print(
-            f"[SCHEDULER] periodic summary job finished: "
-            f"{result['summarised_count']}/{result['session_count']} session(s) summarised, "
-            f"{result.get('resent_count', 0)} resent, "
-            f"slack={result.get('slack')}"
+        log.info(
+            "periodic summary job finished: %s/%s session(s) summarised, "
+            "%s resent, slack=%s",
+            result["summarised_count"],
+            result["session_count"],
+            result.get("resent_count", 0),
+            result.get("slack"),
         )
-    except Exception as exc:
-        print(f"[SCHEDULER] periodic summary job failed: {exc}")
-        print(traceback.format_exc())
+    except Exception:
+        log.exception("periodic summary job failed")
 
 
 def stop_scheduler() -> None:
@@ -83,7 +88,7 @@ def stop_scheduler() -> None:
         scheduler, _scheduler = _scheduler, None
     if scheduler is not None and scheduler.running:
         scheduler.shutdown(wait=False)
-        print("[SCHEDULER] stopped")
+        log.info("scheduler stopped")
 
 
 def get_scheduler() -> Optional[BackgroundScheduler]:
@@ -91,4 +96,16 @@ def get_scheduler() -> Optional[BackgroundScheduler]:
     return _scheduler
 
 
-atexit.register(stop_scheduler)
+def _stop_scheduler_at_exit() -> None:
+    """
+    Stop the scheduler without logging. Python can close the output stream
+    before it runs the atexit handlers, and a log line then fails and reports
+    itself on stderr. APScheduler logs inside shutdown() too, so the whole
+    call is silenced rather than only our own line. db_pool keeps its atexit
+    handler quiet for the same reason.
+    """
+    logging.disable(logging.CRITICAL)
+    stop_scheduler()
+
+
+atexit.register(_stop_scheduler_at_exit)

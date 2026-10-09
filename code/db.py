@@ -2,9 +2,9 @@
 Database bootstrap: make the database and its tables if they do not exist.
 Connections come from the pool in db_pool.
 """
+import logging
 import threading
 import time
-import traceback
 
 import psycopg
 
@@ -13,6 +13,7 @@ from db_pool import RETRYABLE_ERRORS, run_with_retry
 from langchain_postgres import PostgresChatMessageHistory
 from prompts_table import check_and_insert_default_prompts
 
+log = logging.getLogger(__name__)
 
 _bootstrap_lock = threading.Lock()
 _bootstrap_thread = None
@@ -34,9 +35,9 @@ def ensure_database_exists(database_url=config.DATABASE_URL, database=config.db_
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
             if not cur.fetchone():
                 cur.execute(f'CREATE DATABASE "{database}"')
-                print(f"Database '{database}' created successfully.")
+                log.info("Database '%s' created successfully.", database)
             else:
-                print(f"Database '{database}' already exists.")
+                log.info("Database '%s' already exists.", database)
 
 
 def ensure_chat_table_exists(sync_connection, table):
@@ -44,7 +45,7 @@ def ensure_chat_table_exists(sync_connection, table):
     Use LangChain's helper to make sure the chat history table exists.
     """
     PostgresChatMessageHistory.create_tables(sync_connection, table)
-    print(f"Table '{table}' created or verified.")
+    log.info("Table '%s' created or verified.", table)
 
 
 def ensure_summaries_table_exists(sync_connection):
@@ -114,7 +115,7 @@ def ensure_summaries_table_exists(sync_connection):
         cur.execute("ALTER TABLE chat_info ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE chat_info ADD COLUMN IF NOT EXISTS summary_notified_at TIMESTAMPTZ;")
 
-    print("Table 'chat_info' created/verified successfully.")
+    log.info("Table 'chat_info' created/verified successfully.")
 
 
 def ensure_prompts_table_exists(sync_connection):
@@ -149,7 +150,7 @@ def ensure_prompts_table_exists(sync_connection):
         """
         cur.execute(alter_table_sql)
 
-    print("Table 'prompts' created/verified successfully.")
+    log.info("Table 'prompts' created/verified successfully.")
 
 
 def ensure_domains_table_exists(sync_connection):
@@ -171,7 +172,7 @@ def ensure_domains_table_exists(sync_connection):
         """
         cur.execute(create_table_sql)
 
-    print("Table 'domains' created/verified successfully.")
+    log.info("Table 'domains' created/verified successfully.")
 
 
 def _create_schema(sync_connection):
@@ -200,7 +201,7 @@ def _bootstrap_once():
     except Exception as exc:
         # A managed database usually denies the 'postgres' database. This is
         # not a fault: the schema step below still works.
-        print(f"Skipping the database-creation check: {exc}")
+        log.info("Skipping the database-creation check: %s", exc)
 
     run_with_retry(_create_schema, attempts=1, label="schema bootstrap")
 
@@ -211,20 +212,23 @@ def _bootstrap_loop(limit=config.DB_BOOTSTRAP_ATTEMPTS):
     for attempt in range(1, limit + 1):
         try:
             _bootstrap_once()
-            print(f"Database schema ready (attempt {attempt}).")
+            log.info("Database schema ready (attempt %d).", attempt)
             return
         except RETRYABLE_ERRORS as exc:
-            print(f"Schema bootstrap attempt {attempt}/{limit} failed: {exc}")
+            log.warning(
+                "Schema bootstrap attempt %d/%d failed: %s", attempt, limit, exc
+            )
         except Exception:
             # Continue to retry. Some faults are temporary but are not
             # connection errors.
-            print(f"Schema bootstrap attempt {attempt}/{limit} failed unexpectedly")
-            print(traceback.format_exc())
+            log.exception(
+                "Schema bootstrap attempt %d/%d failed unexpectedly", attempt, limit
+            )
         time.sleep(delay)
         delay = min(delay * 2, config.DB_RETRY_MAX_DELAY)
 
-    print(
-        f"Giving up on schema bootstrap after {limit} attempts. The app stays up."
+    log.error(
+        "Giving up on schema bootstrap after %d attempts. The app stays up.", limit
     )
 
 

@@ -1,9 +1,10 @@
+import logging
 from http import HTTPStatus
-import traceback
 from flask import Blueprint, request, jsonify
 from api.models import APIResponse
 from prompts_table import get_all_prompts, upsert_prompt
 
+log = logging.getLogger(__name__)
 
 prompt_bp = Blueprint("prompts", __name__)
 
@@ -13,7 +14,7 @@ def get_prompts():
     try:
         return jsonify({"prompts": get_all_prompts()}), 200
     except Exception:
-        print(traceback.format_exc())
+        log.exception("Error in prompts GET endpoint")
         return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)
 
 @prompt_bp.route('/prompt', methods=['POST'])
@@ -31,6 +32,6 @@ def create_or_update_prompt():
             return jsonify({"success": True, "message": "Prompt created/updated."}), 200
         else:
             return jsonify({"success": False, "error": "Failed to create/update prompt."}), 500
-    except Exception as e:
-        print(traceback.format_exc())
+    except Exception:
+        log.exception("Error in prompt POST endpoint")
         return APIResponse().response(HTTPStatus.INTERNAL_SERVER_ERROR)

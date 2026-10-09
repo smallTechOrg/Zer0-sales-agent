@@ -1,10 +1,13 @@
 import json
+import logging
 from datetime import datetime
 from db_pool import with_connection
 from langchain_groq import ChatGroq
 from config import GROQ_API_KEY, GROQ_MODEL_NAME, agent_type
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from system_prompt import get_prompt
+
+log = logging.getLogger(__name__)
 
 def process_conversation(user_input, session_id, request_type, domain):
     """
@@ -13,24 +16,26 @@ def process_conversation(user_input, session_id, request_type, domain):
     """
 
     try:
-        print(f"[PROCESSOR] Processing session {session_id} for contact info detection...")  
+        log.info("Processing session %s for contact info detection", session_id)
         # Update request_type for the new messages in this session
         _update_session_request_type(session_id, request_type, domain)
         # Choose llm function based on request type
         info_data = _detect_info_with_llm(user_input, request_type, domain)
         
         if info_data and _has_valid_info(info_data, request_type):
-            print(f"[PROCESSOR] info detected in session {session_id}")
+            log.info("info detected in session %s", session_id)
                 
             # Save information to database
             _save_info_to_database(session_id, info_data, user_input, request_type, domain)
-            print(f"[PROCESSOR] information saved for session {session_id}.")
+            log.info("information saved for session %s", session_id)
         else:
-            print(f"[PROCESSOR] No Info detected in current message for session {session_id}")
+            log.info(
+                "No info detected in current message for session %s", session_id
+            )
 
         
-    except Exception as e:
-        print(f"[PROCESSOR] Error in conversation processor: {e}")
+    except Exception:
+        log.exception("Error in conversation processor")
         # Don't let processing errors break the chat flow
 
 @with_connection
@@ -54,12 +59,20 @@ def _update_session_request_type(conn, session_id, request_type, domain):
             cur.execute(insert_query, (session_id, request_type, domain))
 
             if cur.rowcount and cur.rowcount > 0:
-                print(f"[CREATE] Inserted new chat_info for session_id={session_id} with request_type='{request_type}'and domain ='{domain}'")
+                log.info(
+                    "Inserted new chat_info for session_id=%s with "
+                    "request_type=%r and domain=%r",
+                    session_id,
+                    request_type,
+                    domain,
+                )
             else:
-                print(f"[CREATE] session_id={session_id} already exists - no action taken")
+                log.info(
+                    "session_id=%s already exists - no action taken", session_id
+                )
 
-    except Exception as e:
-        print(f"Error inserting request_type row: {e}")
+    except Exception:
+        log.exception("Error inserting request_type row")
         raise
 
 
@@ -104,7 +117,7 @@ def _detect_info_with_llm(message, request_type, domain):
         else:
             prompt_content = get_prompt(domain, request_type,"fetch-name")
             prompt_content = prompt_content.replace("{message}", message)
-        print(f"[INFO_DETECTION] Using prompt: {prompt_content}")   
+        log.debug("Using prompt: %s", prompt_content)
         # Create the prompt
         full_prompt = [SystemMessage(content=prompt_content)]
 
@@ -113,18 +126,20 @@ def _detect_info_with_llm(message, request_type, domain):
         response_text = response.content.strip()
         # Clean markdown fences if present
         response_text = response_text.strip("`").replace("json\n", "")        
-        print(f"[INFO_DETECTION] LLM Response: {response_text}")
+        log.debug("LLM response: %s", response_text)
         
         # Parse JSON response
         try:
             contact_info = json.loads(response_text)
             return contact_info
         except json.JSONDecodeError:
-            print(f"[INFO_DETECTION] Failed to parse LLM response as JSON: {response_text}")
+            log.warning(
+                "Failed to parse LLM response as JSON: %s", response_text
+            )
             return {"contact_name": "", "email": "", "mobile": "", "country": ""}
             
-    except Exception as e:
-        print(f"[INFO_DETECTION] Error in LLM contact info detection: {e}")
+    except Exception:
+        log.exception("Error in LLM contact info detection")
         return {"contact_name": "", "email": "", "mobile": "", "country": ""}
     
 @with_connection
@@ -212,4 +227,8 @@ def _save_info_to_database(conn, session_id, info_data, original_message, reques
         if country: updates.append(f"country='{country}'")
         if mobile: updates.append(f"mobile='{mobile}'")
 
-        print(f"[DATABASE] Info updated for session {session_id}: {', '.join(updates) if updates else 'no new info'}")
+        log.info(
+            "Info updated for session %s: %s",
+            session_id,
+            ", ".join(updates) if updates else "no new info",
+        )

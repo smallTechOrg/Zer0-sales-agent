@@ -5,16 +5,26 @@ Nothing else calls ``os.getenv``. Modules import the name they need from this
 module, so there is one place to see what is configurable, what its default is,
 and what belongs in ``.env`` -- which carries values only, never definitions.
 """
+import logging
 import os
 from dotenv import load_dotenv
 from enum import Enum
 import requests
+
+from logging_setup import redact_url
+
 load_dotenv()
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Flask
 # ---------------------------------------------------------------------------
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+
+# LOG_LEVEL is the one setting this module does not own. It is read in
+# logging_setup.py, which cannot import this module: logging has to be
+# configured before the lines below are logged.
 
 # Only used by `python app.py`. Deployment runs `flask run --port=5000`, which
 # sets the port itself.
@@ -78,13 +88,13 @@ def get_db_name():
         response = requests.get(METADATA_URL, headers=headers, timeout=2)
         if response.status_code == 200:
             branch_name  = response.text.strip()
-            print(f"Detected branch: {branch_name}")
+            log.info("Detected branch: %s", branch_name)
             if branch_name == 'main':
                 return 'prod_chat_db'
             else:
                 return 'staging_chat_db'
     except Exception as e:
-        print(f"Could not fetch metadata (defaulting to local DB): {e}")
+        log.info("Could not fetch metadata (defaulting to local DB): %s", e)
 
     # Fallback if metadata not found or error occurs
     return db_name
@@ -92,7 +102,7 @@ def get_db_name():
 db_name = get_db_name()
 DATABASE_URL = DATABASE_URL + db_name
 
-print("Connecting to:", DATABASE_URL)
+log.info("Connecting to: %s", redact_url(DATABASE_URL))
 
 # ---------------------------------------------------------------------------
 # Database connection pool (see code/db_pool.py)

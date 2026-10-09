@@ -1,8 +1,11 @@
 import json
+import logging
 from pathlib import Path
 from functools import lru_cache
 from config import agent_type, DEFAULT_DOMAIN
 from db_pool import with_connection
+
+log = logging.getLogger(__name__)
 
 
 def load_json(path: Path):
@@ -19,8 +22,8 @@ def load_json(path: Path):
         except json.JSONDecodeError:
             # Not JSON — return plain text as-is
             return content.strip()
-    except Exception as e:
-        print(f"Failed to load file {path}: {e}")
+    except Exception:
+        log.exception("Failed to load file %s", path)
         return None
 
 def check_and_insert_default_prompts(sync_connection):
@@ -35,10 +38,10 @@ def check_and_insert_default_prompts(sync_connection):
         cur.execute("SELECT COUNT(*) FROM prompts;")
         count = cur.fetchone()[0]
         if count != 0:
-            print("Prompts table already contains data. No insertion needed.")
+            log.info("Prompts table already contains data. No insertion needed.")
             return
 
-        print("Prompts table is empty. Inserting default prompts...")
+        log.info("Prompts table is empty. Inserting default prompts...")
 
         default_prompts = [
             (DEFAULT_DOMAIN, 'generic', 'fetch-name', Path("prompts/name_prompt.txt")),
@@ -55,7 +58,7 @@ def check_and_insert_default_prompts(sync_connection):
             if isinstance(text, Path):
                 text_json = load_json(text)
                 if text_json is None:
-                    print(f"Skipping insertion for {text}")
+                    log.warning("Skipping insertion for %s", text)
                     continue
                 text_to_insert = text_json
             else:
@@ -69,7 +72,7 @@ def check_and_insert_default_prompts(sync_connection):
                 ON CONFLICT (domain, agent_type, type) DO NOTHING;
             """, (domain, agent_type, prompt_type, text_to_insert))
 
-        print("Default prompts inserted successfully.")
+        log.info("Default prompts inserted successfully.")
 
 
 def check_and_insert_default_domains(sync_connection):

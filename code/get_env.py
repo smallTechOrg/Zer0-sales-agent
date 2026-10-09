@@ -1,5 +1,10 @@
+import logging
+
 from google.cloud import secretmanager
-import sys
+
+from logging_setup import configure_logging
+
+log = logging.getLogger(__name__)
 
 # CONFIGURE PROJECT AND SECRETS 
 PROJECT_ID = "ai-agent-boilerplate0"  
@@ -16,8 +21,8 @@ def access_secret(secret_id: str, project_id: str, version_id: str = "latest") -
         secret_path = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
         response = client.access_secret_version(request={"name": secret_path})
         return response.payload.data.decode("UTF-8")
-    except Exception as e:
-        print(f"❌ Error accessing secret '{secret_id}': {e}", file=sys.stderr)
+    except Exception:
+        log.exception("Error accessing secret %r", secret_id)
         return None
 def generate_env_file(secrets: dict, env_path: str = ".env"):
     try:
@@ -40,16 +45,22 @@ SLACK_TIMEOUT=10
 # Scheduler: when the periodic summary runs (minute hour day month weekday),
 # read in Asia/Kolkata. Start of every hour.
 PERIODIC_SUMMARY_CRON=0 * * * *
+
+# Logging: DEBUG, INFO, WARNING or ERROR. DEBUG also logs the prompts and the
+# raw LLM replies, which carry what the visitor typed.
+LOG_LEVEL=INFO
 """
 
         with open(env_path, "w") as f:
             f.write(env_content)
-        print(f"✅ Generated {env_path} with all secrets.")
-    except Exception as e:
-        print(f"❌ Error generating {env_path}: {e}", file=sys.stderr)
+        log.info("Generated %s with all secrets.", env_path)
+    except Exception:
+        log.exception("Error generating %s", env_path)
        
 
 if __name__ == "__main__":
+    configure_logging()
+
     secrets = {}
     for env_var, gcp_secret_name in SECRET_MAPPING.items():
         value = access_secret(gcp_secret_name, PROJECT_ID)

@@ -1,8 +1,11 @@
 import json
+import logging
 from pathlib import Path
 from functools import lru_cache
 from db_pool import with_connection
 from config import DEFAULT_DOMAIN, agent_type
+
+log = logging.getLogger(__name__)
 
 FORMATTING_INSTRUCTION = """
 
@@ -50,11 +53,21 @@ def load_prompt_from_db(domain: str, agent_type: str, prompt_type: str):
         row = find_prompt(domain, agent_type, prompt_type)
 
         if row is None:
-            print(f"Prompt not found in DB: {domain}/{agent_type}/{prompt_type}, looking for parent prompt")
+            log.info(
+                "Prompt not found in DB: %s/%s/%s, looking for parent prompt",
+                domain,
+                agent_type,
+                prompt_type,
+            )
             parent_domain = find_parent_key(domain) 
             row = find_prompt(parent_domain, agent_type, prompt_type)
             if row is None:
-                print(f"Prompt not found in DB for parent Domain: {domain}/{agent_type}/{prompt_type}")
+                log.warning(
+                    "Prompt not found in DB for parent domain: %s/%s/%s",
+                    domain,
+                    agent_type,
+                    prompt_type,
+                )
                 return None
 
         return row[0]

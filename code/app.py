@@ -1,3 +1,11 @@
+# ruff: noqa: E402
+# configure_logging() runs before the project imports below on purpose: config.py
+# and db_pool.py log while they are being imported, and those lines are only
+# formatted and sent to stdout once the handler exists.
+from logging_setup import configure_logging
+
+configure_logging()
+
 from flask import Flask, render_template
 from flask_cors import CORS
 from flask_smorest import Api
