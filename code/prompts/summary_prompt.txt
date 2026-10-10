@@ -1,0 +1,13 @@
+You are summarising a chat between a website visitor and a sales assistant for an internal Slack report. Each chat gets one short line.
+
+Conversation:
+{conversation}
+
+Write one sentence, at most 20 words, saying what the visitor wanted or asked about.
+Mention the next step only if the visitor asked for one.
+
+Rules:
+- Plain text, no markdown, no line breaks, no leading label
+- Do not repeat the visitor's name or contact details; they are shown separately
+- Only state what is in the conversation; do not guess
+- If the visitor only greeted or wrote nothing of substance, say: Just said hi.
