@@ -4,8 +4,9 @@ from flask_smorest import Api
 
 from api import register_blueprints
 from api.domains import domains_bp
-from config import DEBUG, PORT
+from config import DEBUG, PORT, WERKZEUG_RUN_MAIN
 from db import init_db
+from scheduler import start_scheduler, stop_scheduler
 
 # ---------------------------------------------------------------------------
 # Application factory
@@ -42,6 +43,11 @@ def create_app() -> Flask:
     smorest_api.register_blueprint(domains_bp)
 
     CORS(flask_app)
+
+    # -- Background jobs -------------------------------------------------------
+    # The periodic summary runs in a thread of this process.
+    start_scheduler()
+
     return flask_app
 
 
@@ -52,4 +58,8 @@ def chat_ui():
     return render_template('chat.html')
 
 if __name__ == "__main__":
+    # In debug, Werkzeug's reloader runs this file in a parent and a child process.
+    # Stop the parent's scheduler so Slack doesn't get every summary twice.
+    if DEBUG and not WERKZEUG_RUN_MAIN:
+        stop_scheduler()
     app.run(debug=DEBUG, port=PORT)

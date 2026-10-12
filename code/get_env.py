@@ -5,7 +5,8 @@ import sys
 PROJECT_ID = "ai-agent-boilerplate0"  
 SECRET_MAPPING = {
     "GROQ_API_KEY": "GROQ_API_KEY",           
-    "POSTGRES_URL": "POSTGRES_URL"
+    "POSTGRES_URL": "POSTGRES_URL",
+    "SLACK_WEBHOOK_URL": "SLACK_WEBHOOK_URL"
 }
 ENV_FILE_PATH = ".env"
 
@@ -31,6 +32,14 @@ GROQ_MODEL_NAME=openai/gpt-oss-120b
 
 # PostgreSQL Database Configuration
 DATABASE_URL={secrets['POSTGRES_URL']}
+
+# Slack
+SLACK_WEBHOOK_URL={secrets['SLACK_WEBHOOK_URL']}
+SLACK_TIMEOUT=10
+
+# Scheduler: when the periodic summary runs (minute hour day month weekday),
+# read in Asia/Kolkata. Start of every hour.
+PERIODIC_SUMMARY_CRON=0 * * * *
 """
 
         with open(env_path, "w") as f:
