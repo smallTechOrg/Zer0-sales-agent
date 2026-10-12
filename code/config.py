@@ -45,8 +45,10 @@ DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "COMMON")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 # Seconds to wait for one webhook POST.
 SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
-# The Slack message header links here.
+# The Slack message header links to one of these: production on the main
+# branch, staging otherwise. Chosen in get_db_name_and_dashboard_url() below.
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zero.smalltech.in/dashboard?h=khuljasimsim")
+DASHBOARD_URL_STAGING = os.getenv("DASHBOARD_URL_STAGING", "https://zero-staging.smalltech.in/dashboard?h=khuljasimsim")
 # How many days back the summary job looks for sessions without a summary.
 # Only a cap on retries: a session is summarised once and then left alone, so
 # the first run after a long outage does not go through the whole history.
@@ -70,7 +72,7 @@ table_name = os.getenv("DB_TABLE_NAME", "chat_table")
 DATABASE_URL = os.getenv('DATABASE_URL')
 # For cloud deployment, lets create different db for production and staging
 
-def get_db_name():
+def get_db_name_and_dashboard_url():
     #db based on Production and staging based on GitHub branch name
     METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/BRANCH_NAME"
     headers = {"Metadata-Flavor": "Google"}
@@ -80,16 +82,17 @@ def get_db_name():
             branch_name  = response.text.strip()
             print(f"Detected branch: {branch_name}")
             if branch_name == 'main':
-                return 'prod_chat_db'
+                return 'prod_chat_db', DASHBOARD_URL
             else:
-                return 'staging_chat_db'
+                return 'staging_chat_db', DASHBOARD_URL_STAGING
     except Exception as e:
         print(f"Could not fetch metadata (defaulting to local DB): {e}")
 
-    # Fallback if metadata not found or error occurs
-    return db_name
+    # Fallback if metadata not found or error occurs. Local runs link to the
+    # staging dashboard, never to production.
+    return db_name, DASHBOARD_URL_STAGING
 
-db_name = get_db_name()
+db_name, DASHBOARD_URL = get_db_name_and_dashboard_url()
 DATABASE_URL = DATABASE_URL + db_name
 
 print("Connecting to:", DATABASE_URL)
