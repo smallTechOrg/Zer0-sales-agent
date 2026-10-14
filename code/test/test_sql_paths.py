@@ -20,7 +20,9 @@ from psycopg.rows import dict_row
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import config  # noqa: E402
 import db_pool  # noqa: E402
+from psycopg import sql  # noqa: E402
 
 AUDIT_PROMPT_DOMAIN = "_sqlpaths_domain"
 AUDIT_ADDRESS = "sqlpaths-example.invalid"
@@ -74,6 +76,27 @@ class TestChatInfoPaths:
 
         records, _ = get_all_chat_info()
         assert isinstance(records, list)
+
+    def test_leads_skip_chats_where_visitor_wrote_nothing(self, lead):
+        """Only the intro message: not a lead. One visitor message: a lead."""
+        from leads import get_all_chat_info
+
+        def listed():
+            return any(r["session_id"] == lead for r in get_all_chat_info()[0])
+
+        def add(msg_type):
+            query = sql.SQL(
+                "INSERT INTO {table} (session_id, message) VALUES (%s, %s::jsonb);"
+            ).format(table=sql.Identifier(config.table_name))
+            message = '{"type": "%s", "data": {"content": "hi", "type": "%s"}}' % (msg_type, msg_type)
+            with db_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (lead, message))
+
+        add("ai")
+        assert not listed()
+        add("human")
+        assert listed()
 
     def test_contact_update_writes_every_column_it_names(self, lead):
         """The statement that was broken: each field must land."""
