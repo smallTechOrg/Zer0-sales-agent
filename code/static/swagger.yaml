@@ -390,6 +390,11 @@ paths:
                           description: Analyst's remark for that session id
                           example: "Send a mail and waiting for a review"
 
+                        summary:
+                          type: string
+                          description: LLM-generated summary of the conversation; empty until the periodic summary job has run for that session
+                          example: "Visitor asked about pricing for a custom CRM and shared their email for a follow-up."
+
                         doamin:
                           type: string
                           description: request frontend's Domain
