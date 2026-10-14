@@ -135,6 +135,10 @@ def find_chats_needing_summary(conn, window: timedelta = SUMMARY_WINDOW) -> List
     Return one row per chat with a message in *window* that has no summary yet
     or got new messages after its summary was written, joined with its
     chat_info details (domain, name, email, status, ...). Newest first.
+
+    Only chats that already have a chat_info row, which the chat API creates
+    when the visitor writes. A session holding only the greeting saved by
+    /history has no row and is not a lead, so it is skipped.
     """
     query = sql.SQL(
         """
@@ -150,7 +154,7 @@ def find_chats_needing_summary(conn, window: timedelta = SUMMARY_WINDOW) -> List
             MIN(h.created_at)                   AS first_message,
             MAX(h.created_at)                   AS last_message
         FROM {table} h
-        LEFT JOIN chat_info ci ON ci.session_id = h.session_id::text
+        JOIN chat_info ci ON ci.session_id = h.session_id::text
         WHERE h.created_at >= NOW() - %(window)s::interval
         GROUP BY
             h.session_id, ci.domain, ci.contact_name, ci.email, ci.request_type,
@@ -235,19 +239,18 @@ def summarise_conversation(conversation: List[Dict[str, str]]) -> str:
 @with_connection
 def save_summary(conn, session_id: str, summary: str) -> None:
     """
-    Upsert the summary and summary_generated_at on the session's chat_info row
-    (created if missing).
+    Set summary and summary_generated_at on the session's chat_info row. Never
+    creates the row: a chat_info row is a lead on the dashboard, and only the
+    chat API makes one.
     """
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO chat_info (session_id, summary, summary_generated_at)
-            VALUES (%s, %s, NOW())
-            ON CONFLICT (session_id) DO UPDATE SET
-                summary              = EXCLUDED.summary,
-                summary_generated_at = EXCLUDED.summary_generated_at;
+            UPDATE chat_info
+            SET summary = %s, summary_generated_at = NOW()
+            WHERE session_id = %s;
             """,
-            (session_id, summary),
+            (summary, session_id),
         )
     print(f"[PERIODIC_SUMMARY] summary saved for session {session_id}")
 

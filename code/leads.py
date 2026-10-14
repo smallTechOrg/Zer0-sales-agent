@@ -1,13 +1,17 @@
 from typing import List, Dict, Any, Tuple
+from psycopg import sql
 from psycopg.rows import dict_row
+import config
 from db_pool import with_connection
 from http import HTTPStatus
 
 
 @with_connection
 def _select_chat_info(conn) -> List[Dict[str, Any]]:
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("""
+    # Only chats where the visitor wrote at least one message. Opening the
+    # widget saves the intro message, and the periodic summary then makes a
+    # chat_info row for that session; those rows are not leads.
+    query = sql.SQL("""
             SELECT
                 session_id,
                 COALESCE(contact_name, '') as name,
@@ -21,8 +25,15 @@ def _select_chat_info(conn) -> List[Dict[str, Any]]:
                 COALESCE(created_at) as time
             FROM chat_info
             WHERE is_active is TRUE
+              AND EXISTS (
+                  SELECT 1 FROM {table} h
+                  WHERE h.session_id::text = chat_info.session_id
+                    AND h.message->>'type' = 'human'
+              )
             ORDER BY created_at DESC;
-        """)
+        """).format(table=sql.Identifier(config.table_name))
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(query)
         return cur.fetchall()
 
 
