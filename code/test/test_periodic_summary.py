@@ -29,6 +29,13 @@ def _insert_message(session_id, age, msg_type="human", content="hi"):
             cur.execute(query, (session_id, message, age))
 
 
+def _insert_chat_info(session_id):
+    """The chat_info row the chat API makes when the visitor writes."""
+    with db_pool.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO chat_info (session_id) VALUES (%s);", (session_id,))
+
+
 def _chat_info_row(session_id):
     with db_pool.get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -70,7 +77,7 @@ def _cleanup(session_ids):
 @pytest.fixture
 def sessions():
     """
-    recent  fresh messages, no chat_info row: needs a summary
+    recent  fresh messages, chat_info row without a summary: needs a summary
     stale   one message 10 days old, outside the window: skipped
     """
     recent = str(uuid.uuid4())
@@ -78,6 +85,8 @@ def sessions():
     _insert_message(recent, timedelta(minutes=5))
     _insert_message(recent, timedelta(minutes=1), msg_type="ai", content="hello")
     _insert_message(stale, timedelta(days=10))
+    _insert_chat_info(recent)
+    _insert_chat_info(stale)
     yield recent, stale
     _cleanup([recent, stale])
 
@@ -181,9 +190,9 @@ class TestFindChatsNeedingSummary:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO chat_info (session_id, contact_name, email, domain) "
-                    "VALUES (%s, %s, %s, %s);",
-                    (recent, "Ada", "ada@example.com", config.DEFAULT_DOMAIN),
+                    "UPDATE chat_info SET contact_name = %s, email = %s, domain = %s "
+                    "WHERE session_id = %s;",
+                    ("Ada", "ada@example.com", config.DEFAULT_DOMAIN, recent),
                 )
 
         row = {r["session_id"]: r for r in find_chats_needing_summary()}[recent]
@@ -193,15 +202,16 @@ class TestFindChatsNeedingSummary:
         assert row["status"] == "OPEN"
         assert row["created_at"] is not None
 
-    def test_details_are_empty_without_chat_info_row(self, sessions):
+    def test_skips_session_without_chat_info_row(self):
         from periodic_summary import find_chats_needing_summary
 
-        recent, _ = sessions
-        row = {r["session_id"]: r for r in find_chats_needing_summary()}[recent]
-        assert row["name"] == ""
-        assert row["email"] == ""
-        assert row["domain"] is None
-        assert row["created_at"] is None
+        # Only the greeting /history saves when the widget opens.
+        greeting_only = str(uuid.uuid4())
+        _insert_message(greeting_only, timedelta(minutes=5), msg_type="ai", content="Welcome!")
+        try:
+            assert greeting_only not in {r["session_id"] for r in find_chats_needing_summary()}
+        finally:
+            _cleanup([greeting_only])
 
 
 class TestFindUnnotifiedSummaries:
@@ -223,9 +233,6 @@ class TestFindUnnotifiedSummaries:
         from periodic_summary import find_unnotified_summaries
 
         recent, _ = sessions
-        with db_pool.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("INSERT INTO chat_info (session_id) VALUES (%s);", (recent,))
         assert recent not in {r["session_id"] for r in find_unnotified_summaries()}
 
 
@@ -295,8 +302,8 @@ class TestSaveSummary:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO chat_info (session_id, contact_name, email) VALUES (%s, %s, %s);",
-                    (recent, "Ada", "ada@example.com"),
+                    "UPDATE chat_info SET contact_name = %s, email = %s WHERE session_id = %s;",
+                    ("Ada", "ada@example.com", recent),
                 )
 
         save_summary(recent, "first")
@@ -312,14 +319,12 @@ class TestSaveSummary:
         assert row["summary"] == "second"
         assert row["contact_name"] == "Ada"
 
-    def test_creates_row_when_lead_is_missing(self, sessions):
+    def test_does_not_create_row_when_lead_is_missing(self):
         from periodic_summary import save_summary
 
-        recent, _ = sessions
-        assert _chat_info_row(recent) is None
-
-        save_summary(recent, "no lead yet")
-        assert _chat_info_row(recent)["summary"] == "no lead yet"
+        no_lead = str(uuid.uuid4())
+        save_summary(no_lead, "no lead yet")
+        assert _chat_info_row(no_lead) is None
 
 
 class TestMarkSummariesNotified:
@@ -393,7 +398,7 @@ class TestPeriodicSummary:
         first = periodic_summary.periodic_summary()
         assert "error" in {s["session_id"]: s for s in first["sessions"]}[recent]
         # Nothing was saved, so nothing was stamped.
-        assert _chat_info_row(recent) is None
+        assert _chat_info_row(recent)["summary"] is None
 
         monkeypatch.setattr(periodic_summary, "summarise_conversation", real_summarise)
         second = periodic_summary.periodic_summary()
@@ -419,13 +424,29 @@ class TestPeriodicSummary:
         assert "summary" not in by_id[recent]
         assert result["summarised_count"] == 0
         assert result["llm_failed_count"] >= 1
-        assert _chat_info_row(recent) is None
+        assert _chat_info_row(recent)["summary"] is None
+
+    def test_greeting_only_session_creates_no_lead(self, fake_llm, fake_slack):
+        import periodic_summary
+
+        # The visitor opened the widget and never wrote: no chat_info row.
+        greeting_only = str(uuid.uuid4())
+        _insert_message(greeting_only, timedelta(minutes=5), msg_type="ai", content="Welcome!")
+        try:
+            result = periodic_summary.periodic_summary()
+
+            assert greeting_only not in {s["session_id"] for s in result["sessions"]}
+            assert _chat_info_row(greeting_only) is None
+            assert fake_llm == []
+        finally:
+            _cleanup([greeting_only])
 
     def test_silent_session_is_saved_stamped_and_not_sent(self, fake_llm, monkeypatch):
         import periodic_summary
 
         silent = str(uuid.uuid4())
         _insert_message(silent, timedelta(minutes=5), msg_type="ai", content="Welcome!")
+        _insert_chat_info(silent)
         # Slack has nothing to send for this run, so it reports a skip.
         monkeypatch.setattr(periodic_summary, "send_summaries_to_slack",
                             lambda result: {"sent": 0, "skipped": "nothing to report"})
