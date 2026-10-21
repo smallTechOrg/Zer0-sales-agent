@@ -53,9 +53,12 @@ SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 # Seconds to wait for one webhook POST.
 SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
 # The Slack message header links to one of these: production on the main
-# branch, staging otherwise. Chosen in get_db_name_and_dashboard_url() below.
+# branch, staging on other branches, local when not running in the cloud.
+# Chosen in get_db_name_and_dashboard_url() below.
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zero.smalltech.in/dashboard?h=khuljasimsim")
 DASHBOARD_URL_STAGING = os.getenv("DASHBOARD_URL_STAGING", "https://zero-staging.smalltech.in/dashboard?h=khuljasimsim")
+# zero-frontend-web run locally on port 3001, next to a host site on 3000.
+DASHBOARD_URL_LOCAL = os.getenv("DASHBOARD_URL_LOCAL", "http://localhost:3001/dashboard?h=khuljasimsim")
 # How many days back the summary job looks for sessions without a summary.
 # Only a cap on retries: a session is summarised once and then left alone, so
 # the first run after a long outage does not go through the whole history.
@@ -129,8 +132,8 @@ def get_db_name_and_dashboard_url():
         print(f"Could not fetch metadata (defaulting to local DB): {e}")
 
     # Fallback if metadata not found or error occurs. Local runs link to the
-    # staging dashboard, never to production.
-    return db_name, DASHBOARD_URL_STAGING
+    # local dashboard, never to staging or production.
+    return db_name, DASHBOARD_URL_LOCAL
 
 db_name, DASHBOARD_URL = get_db_name_and_dashboard_url()
 DATABASE_URL = DATABASE_URL + db_name
