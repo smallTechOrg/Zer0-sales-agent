@@ -1,54 +1,244 @@
-name: Deploy Python App to GCP E2 (Staging)
+name: Deploy to Cloud Run
+
+# staging branch -> zero-sales-agent-staging, main -> zero-sales-agent.
+# One-time GCP setup: scripts/gcp_setup.sh. Details: DEPLOYMENT.md.
 
 on:
   push:
     branches:
       - main
-      - staging   # change if you want a different branch for staging
+      - staging
+  workflow_dispatch:   # re-run a deploy of the selected branch by hand
+
+# One deploy per branch at a time, in push order. Never cancel one half way.
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT }}
+  REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  AR_REPOSITORY: zero-sales-agent
+  IMAGE_NAME: zero-sales-agent
 
 jobs:
-  deploy-staging:
-    if: github.ref != 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: deploy-staging   # matches the environment you created in GitHub
-
+  test:
+    runs-on: ubuntu-24.04   # ubuntu-latest (26.04) has no Python 3.12.10 build
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: code
+    env:
+      APP_ENV: local
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/
+      GROQ_API_KEY: dummy-key-for-tests
     steps:
-      - uses: 'actions/checkout@v4' # Checkout your repository
-      - uses: 'google-github-actions/auth@v2' # Authenticate to Google Cloud
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          project_id: ${{ secrets.GCP_PROJECT }} 
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: code/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: pytest -q test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-24.04   # ubuntu-latest (26.04) has no Python 3.12.10 build
+    # The deploy-staging GitHub environment holds GCP_PROJECT and GCP_SA_KEY
+    # (the github-deployer service account) and serves both branches, as the
+    # VM workflow did. To gate production deploys, create deploy-production
+    # with the same secrets and required reviewers, and select it for main.
+    environment: deploy-staging
+    env:
+      APP_ENV: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      SERVICE: ${{ github.ref_name == 'main' && 'zero-sales-agent' || 'zero-sales-agent-staging' }}
+      # Production keeps one warm instance so the chat widget never waits for
+      # a cold start. Staging scales to zero.
+      MIN_INSTANCES: ${{ github.ref_name == 'main' && '1' || '0' }}
+      # Each instance opens up to DB_POOL_MAX_SIZE (2) connections on the
+      # shared database: this caps the total at 2 x MAX_INSTANCES.
+      MAX_INSTANCES: ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
+      # Requests one instance takes at once. Matches gunicorn's --threads 8 in
+      # the Dockerfile: more would only queue inside gunicorn (and fight over
+      # the 2 pooled DB connections) instead of making Cloud Run scale out.
+      CONCURRENCY: ${{ vars.CLOUD_RUN_CONCURRENCY || '8' }}
+      # The summary job stays paused unless this is "true". Off by default so
+      # it never runs alongside the VMs' own in-process summary (double Slack
+      # posts). Turn it on once the VMs are stopped.
+      SCHEDULER_JOB_ENABLED: ${{ vars.CLOUD_SCHEDULER_ENABLED || 'false' }}
+      SUMMARY_CRON: ${{ vars.PERIODIC_SUMMARY_CRON || '0 * * * *' }}
+      # The database (Cloud SQL ai-agent-db) has only a private IP, so the
+      # service reaches it through Direct VPC egress, like the project's other
+      # Cloud Run services. Set VPC_NETWORK to "none" to turn this off.
+      VPC_NETWORK: ${{ vars.VPC_NETWORK || 'default' }}
+      VPC_SUBNET: ${{ vars.VPC_SUBNET || vars.VPC_NETWORK || 'default' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Update startup script and restart staging VM
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve names
         run: |
-          gcloud compute instances add-metadata ${{secrets.GCP_VM_INSTANCE_NAME_STAGING}} \
-            --zone=${{secrets.GCP_ZONE_STAGING}} \
-            --project=${{secrets.GCP_PROJECT}} \
-            --metadata-from-file=startup-script=./scripts/update_app.sh \
-            --metadata=BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          echo "IMAGE=${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "RUNTIME_SA=zero-sales-agent-run@${PROJECT_ID}.iam.gserviceaccount.com" >> "$GITHUB_ENV"
+          echo "SCHEDULER_SA=zero-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" >> "$GITHUB_ENV"
+          # Audience of the OIDC token Cloud Scheduler sends. A fixed string
+          # per service, so it is known before the service URL exists.
+          echo "JOBS_AUDIENCE=${SERVICE}-jobs" >> "$GITHUB_ENV"
 
-          gcloud compute instances stop ${{secrets.GCP_VM_INSTANCE_NAME_STAGING }} --zone=${{secrets.GCP_ZONE_STAGING}} --project=${{secrets.GCP_PROJECT}}
-          gcloud compute instances start ${{secrets.GCP_VM_INSTANCE_NAME_STAGING }} --zone=${{secrets.GCP_ZONE_STAGING}} --project=${{secrets.GCP_PROJECT}}
-
-  deploy-production:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: deploy-staging  # matches the environment you created in GitHub
-
-    steps:
-      - uses: 'actions/checkout@v4' # Checkout your repository
-      - uses: 'google-github-actions/auth@v2' # Authenticate to Google Cloud
-        with:
-          project_id: ${{ secrets.GCP_PROJECT }} # Replace with your actual GCP project ID
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Update startup script and restart production VM
+      - name: Build and push image
         run: |
-          gcloud compute instances add-metadata ${{secrets.GCP_VM_INSTANCE_NAME_PROD}} \
-            --zone=${{secrets.GCP_ZONE}} \
-            --project=${{secrets.GCP_PROJECT}} \
-            --metadata-from-file=startup-script=./scripts/update_app.sh \
-            --metadata=BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
 
-          gcloud compute instances stop ${{secrets.GCP_VM_INSTANCE_NAME_PROD}} --zone=${{secrets.GCP_ZONE}} --project=${{secrets.GCP_PROJECT}}
-          gcloud compute instances start ${{secrets.GCP_VM_INSTANCE_NAME_PROD}} --zone=${{secrets.GCP_ZONE}} --project=${{secrets.GCP_PROJECT}}
+      - name: Write service environment
+        # Plain settings. Secrets come from Secret Manager (--set-secrets below).
+        run: |
+          cat > "$RUNNER_TEMP/env.yaml" <<EOF
+          APP_ENV: "${APP_ENV}"
+          SCHEDULER_ENABLED: "false"
+          JOBS_OIDC_AUDIENCE: "${JOBS_AUDIENCE}"
+          JOBS_ALLOWED_INVOKERS: "${SCHEDULER_SA}"
+          GROQ_MODEL_NAME: "${{ vars.GROQ_MODEL_NAME || 'openai/gpt-oss-120b' }}"
+          SLACK_TIMEOUT: "10"
+          PERIODIC_SUMMARY_TIMEZONE: "Asia/Kolkata"
+          DB_APPLICATION_NAME: "${SERVICE}"
+          EOF
+          cat "$RUNNER_TEMP/env.yaml"
+
+      - name: Deploy to Cloud Run (no traffic yet)
+        run: |
+          args=(
+            --image "$IMAGE"
+            --region "$REGION"
+            --service-account "$RUNTIME_SA"
+            --allow-unauthenticated
+            --port 8080
+            --cpu 1
+            --memory 1Gi
+            --concurrency "$CONCURRENCY"
+            --timeout 900
+            --cpu-boost
+            --min-instances "$MIN_INSTANCES"
+            --max-instances "$MAX_INSTANCES"
+            --env-vars-file "$RUNNER_TEMP/env.yaml"
+            --set-secrets "GROQ_API_KEY=GROQ_API_KEY:latest,DATABASE_URL=POSTGRES_URL:latest,SLACK_WEBHOOK_URL=SLACK_WEBHOOK_URL:latest"
+            --labels "app=zero-sales-agent,env=${APP_ENV},commit=${GITHUB_SHA::12}"
+            --quiet
+          )
+          # Reach the database's private IP through Direct VPC egress. Only
+          # private ranges go through the VPC; Groq and Slack go out directly.
+          if [ "$VPC_NETWORK" != "none" ]; then
+            args+=(--network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only)
+          fi
+
+          if gcloud run services describe "$SERVICE" --region "$REGION" >/dev/null 2>&1; then
+            # Existing service: start the new revision without traffic and
+            # give it the "candidate" URL, so it is checked before users see it.
+            gcloud run deploy "$SERVICE" "${args[@]}" --no-traffic --tag candidate
+            echo "FIRST_DEPLOY=false" >> "$GITHUB_ENV"
+          else
+            # First deploy: nothing to protect yet, --no-traffic is not allowed.
+            gcloud run deploy "$SERVICE" "${args[@]}"
+            echo "FIRST_DEPLOY=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Smoke test the new revision
+        run: |
+          if [ "$FIRST_DEPLOY" = "true" ]; then
+            URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
+          else
+            URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format=json \
+              | jq -r '.status.traffic[] | select(.tag == "candidate") | .url')
+          fi
+          echo "Checking $URL/health"
+          for i in $(seq 1 20); do
+            CODE=$(curl -s -o /tmp/health.json -w '%{http_code}' --max-time 15 "$URL/health" || true)
+            echo "attempt $i: HTTP $CODE $(cat /tmp/health.json 2>/dev/null)"
+            if [ "$CODE" = "200" ]; then exit 0; fi
+            sleep 6
+          done
+          echo "::error::New revision did not report a healthy database. Traffic was not moved."
+          exit 1
+
+      - name: Send traffic to the new revision
+        if: env.FIRST_DEPLOY == 'false'
+        run: gcloud run services update-traffic "$SERVICE" --region "$REGION" --to-latest --quiet
+
+      - name: Create or update the Cloud Scheduler job
+        run: |
+          URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
+          JOB="${SERVICE}-periodic-summary"
+          args=(
+            --location "$REGION"
+            --time-zone "Asia/Kolkata"
+            --uri "${URL}/jobs/periodic-summary"
+            --http-method POST
+            --oidc-service-account-email "$SCHEDULER_SA"
+            --oidc-token-audience "$JOBS_AUDIENCE"
+            --attempt-deadline 900s
+            --description "Periodic chat summary to Slack for ${SERVICE} (managed by GitHub Actions)"
+            --quiet
+          )
+          job_state() {
+            gcloud scheduler jobs describe "$JOB" --location "$REGION" --format='value(state)' 2>/dev/null || true
+          }
+
+          if [ -z "$(job_state)" ]; then
+            # New job: a created job starts ENABLED. Create it on a schedule
+            # that cannot fire soon (1 January) and pause it at once, so it
+            # never runs before the state below is decided.
+            gcloud scheduler jobs create http "$JOB" "${args[@]}" --schedule "0 0 1 1 *"
+            gcloud scheduler jobs pause "$JOB" --location "$REGION" --quiet
+          fi
+          gcloud scheduler jobs update http "$JOB" "${args[@]}" --schedule "$SUMMARY_CRON"
+
+          # Paused unless CLOUD_SCHEDULER_ENABLED=true: while the VMs still run
+          # their in-process summary, a running job would double every Slack
+          # post. No "|| true": a pause that fails must fail the deploy.
+          if [ "$SCHEDULER_JOB_ENABLED" = "true" ]; then
+            want=ENABLED
+            [ "$(job_state)" = "ENABLED" ] || gcloud scheduler jobs resume "$JOB" --location "$REGION" --quiet
+          else
+            want=PAUSED
+            [ "$(job_state)" = "PAUSED" ] || gcloud scheduler jobs pause "$JOB" --location "$REGION" --quiet
+          fi
+          state=$(job_state)
+          if [ "$state" != "$want" ]; then
+            echo "::error::$JOB is $state, expected $want."
+            exit 1
+          fi
+          if [ "$want" = "PAUSED" ]; then
+            echo "::warning::$JOB is paused. Set the repository variable CLOUD_SCHEDULER_ENABLED=true once the VMs are stopped."
+          fi
+          echo "SCHEDULER_STATE=$state" >> "$GITHUB_ENV"
+
+      - name: Summary
+        run: |
+          URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
+          {
+            echo "### Deployed ${SERVICE}"
+            echo "- URL: ${URL}"
+            echo "- Image: \`${IMAGE}\`"
+            echo "- Environment: ${APP_ENV}"
+            echo "- Summary job: ${SCHEDULER_STATE:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"

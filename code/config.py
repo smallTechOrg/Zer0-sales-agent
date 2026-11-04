@@ -6,6 +6,7 @@ module, so there is one place to see what is configurable, what its default is,
 and what belongs in ``.env`` -- which carries values only, never definitions.
 """
 import os
+import re
 from dotenv import load_dotenv
 from enum import Enum
 import requests
@@ -16,9 +17,15 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
-# Only used by `python app.py`. Deployment runs `flask run --port=5000`, which
-# sets the port itself.
+# Only used by `python app.py`. Cloud Run runs gunicorn on $PORT (see the
+# Dockerfile); the legacy VM runs `flask run --port=5000`.
 PORT = int(os.getenv("PORT", "5001"))
+
+# Which deployment this process is: "production", "staging" or "local".
+# Cloud Run sets it on the service (see .github/workflows/deploy.yml). Unset
+# means "detect": the legacy VM deploy is read from the instance metadata, and
+# anything else is a local run. It picks the database and the dashboard link.
+APP_ENV = os.getenv("APP_ENV", "").strip().lower()
 
 # Set by Werkzeug in the process that serves requests when the debug reloader
 # is on. The watcher parent does not have it. See the __main__ block in app.py.
@@ -63,6 +70,22 @@ PERIODIC_SUMMARY_CRON = os.getenv("PERIODIC_SUMMARY_CRON", "0 * * * *")
 # Timezone the pattern is read in. Without this a server running in UTC
 # would fire at the wrong local time.
 PERIODIC_SUMMARY_TIMEZONE = os.getenv("PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
+# Run the job on the in-process scheduler. Keep it on for local runs and the
+# VM. Turn it off on Cloud Run: an instance gets CPU only while it serves a
+# request and can be stopped at any time, so a background timer there is not
+# reliable. Cloud Scheduler calls POST /jobs/periodic-summary instead.
+SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
+
+# ---------------------------------------------------------------------------
+# Job endpoints (see code/api/jobs.py)
+# ---------------------------------------------------------------------------
+# A job call must carry a Google-signed OIDC token with this audience, issued
+# to one of the service accounts in JOBS_ALLOWED_INVOKERS (comma-separated).
+# Leave either unset and every job call is refused.
+JOBS_OIDC_AUDIENCE = os.getenv("JOBS_OIDC_AUDIENCE", "").strip()
+JOBS_ALLOWED_INVOKERS = frozenset(
+    e.strip().lower() for e in os.getenv("JOBS_ALLOWED_INVOKERS", "").split(",") if e.strip()
+)
 
 # ---------------------------------------------------------------------------
 # Database
@@ -72,8 +95,25 @@ table_name = os.getenv("DB_TABLE_NAME", "chat_table")
 DATABASE_URL = os.getenv('DATABASE_URL')
 # For cloud deployment, lets create different db for production and staging
 
+_ENVIRONMENTS = {
+    "production": ("prod_chat_db", DASHBOARD_URL),
+    "staging": ("staging_chat_db", DASHBOARD_URL_STAGING),
+}
+
+
 def get_db_name_and_dashboard_url():
-    #db based on Production and staging based on GitHub branch name
+    # Cloud Run: the deploy says which environment this is.
+    if APP_ENV in _ENVIRONMENTS:
+        print(f"APP_ENV={APP_ENV}")
+        return _ENVIRONMENTS[APP_ENV]
+    if APP_ENV == "local":
+        return db_name, DASHBOARD_URL_STAGING
+    if APP_ENV:
+        raise ValueError(
+            f"APP_ENV={APP_ENV!r} is not one of production, staging, local"
+        )
+
+    # Legacy VM deploy: the branch is in the instance metadata.
     METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/BRANCH_NAME"
     headers = {"Metadata-Flavor": "Google"}
     try:
@@ -82,9 +122,9 @@ def get_db_name_and_dashboard_url():
             branch_name  = response.text.strip()
             print(f"Detected branch: {branch_name}")
             if branch_name == 'main':
-                return 'prod_chat_db', DASHBOARD_URL
+                return _ENVIRONMENTS["production"]
             else:
-                return 'staging_chat_db', DASHBOARD_URL_STAGING
+                return _ENVIRONMENTS["staging"]
     except Exception as e:
         print(f"Could not fetch metadata (defaulting to local DB): {e}")
 
@@ -95,7 +135,12 @@ def get_db_name_and_dashboard_url():
 db_name, DASHBOARD_URL = get_db_name_and_dashboard_url()
 DATABASE_URL = DATABASE_URL + db_name
 
-print("Connecting to:", DATABASE_URL)
+def _redact_password(url: str) -> str:
+    """The URL with its password replaced, for logs."""
+    return re.sub(r"(://[^:/@]+:)[^/]*@", r"\1***@", url)
+
+
+print("Connecting to:", _redact_password(DATABASE_URL))
 
 # ---------------------------------------------------------------------------
 # Database connection pool (see code/db_pool.py)

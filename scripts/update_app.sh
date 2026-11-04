@@ -1,4 +1,6 @@
 #!/bin/bash
+# LEGACY: VM deploy only. Cloud Run (.github/workflows/deploy.yml) does not use
+# this script. Delete it once the VMs are gone - see DEPLOYMENT.md.
 # update_app.sh
 # Cleans old logs, runs on VM startup, pulls latest code, and triggers deploy.sh
 

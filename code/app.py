@@ -4,7 +4,7 @@ from flask_smorest import Api
 
 from api import register_blueprints
 from api.domains import domains_bp
-from config import DEBUG, PORT, WERKZEUG_RUN_MAIN
+from config import DEBUG, PORT, SCHEDULER_ENABLED, WERKZEUG_RUN_MAIN
 from db import init_db
 from scheduler import start_scheduler, stop_scheduler
 
@@ -45,8 +45,13 @@ def create_app() -> Flask:
     CORS(flask_app)
 
     # -- Background jobs -------------------------------------------------------
-    # The periodic summary runs in a thread of this process.
-    start_scheduler()
+    # Locally and on the VM the periodic summary runs in a thread of this
+    # process. On Cloud Run SCHEDULER_ENABLED is false and Cloud Scheduler
+    # calls POST /jobs/periodic-summary instead (see api/jobs.py).
+    if SCHEDULER_ENABLED:
+        start_scheduler()
+    else:
+        print("[SCHEDULER] disabled (SCHEDULER_ENABLED=false); jobs run via /jobs/*")
 
     return flask_app
 
