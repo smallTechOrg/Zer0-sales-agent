@@ -1,4 +1,6 @@
 #!/bin/bash
+# LEGACY: VM deploy only. Cloud Run (.github/workflows/deploy.yml) does not use
+# this script. Delete it once the VMs are gone - see DEPLOYMENT.md.
 set -euo pipefail
 
 # Re-run as root in a non-interactive way if needed.

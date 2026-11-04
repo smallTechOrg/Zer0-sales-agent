@@ -157,3 +157,8 @@ Using ruff (example inside `code/`)
 ```
 ruff check app.py --fix
 ```
+
+## Deployment
+
+Pushes to `staging` and `main` deploy to Cloud Run through GitHub Actions.
+See [DEPLOYMENT.md](DEPLOYMENT.md).

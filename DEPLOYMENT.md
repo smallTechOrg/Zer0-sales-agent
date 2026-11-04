@@ -1,42 +1,211 @@
 # Deployment Guide
 
-Guide for deploying, monitoring, and debugging the AI Agent Boilerplate application.
+How the Zer0 sales agent is deployed, monitored and debugged.
 
 ## Table of Contents
 1. [How Deployment Works](#how-deployment-works)
-2. [Monitoring Deployments](#monitoring-deployments)
-3. [Debugging Issues](#debugging-issues)
+2. [One-time Setup](#one-time-setup)
+3. [Periodic Summary Job](#periodic-summary-job)
+4. [Moving Off the VMs](#moving-off-the-vms)
+5. [Monitoring](#monitoring)
+6. [Rollback](#rollback)
+7. [Debugging](#debugging)
+8. [Database Connections](#database-connections)
 
 ## How Deployment Works
 
-**Stack**: Flask Python app on GCP Compute Engine with PostgreSQL, automated via GitHub Actions CI/CD.
+**Stack**: Flask app in a container on **Cloud Run**, served by gunicorn,
+talking to the shared PostgreSQL. GitHub Actions builds and deploys it.
 
-**Flow**: `Push to GitHub → GitHub Actions → SSH to GCP VM → Pull Code → Run deploy.sh → App Running`
+| Branch | Cloud Run service | `APP_ENV` | Database | GitHub environment |
+|---|---|---|---|---|
+| `staging` | `zero-sales-agent-staging` | `staging` | `staging_chat_db` | `deploy-staging` |
+| `main` | `zero-sales-agent` | `production` | `prod_chat_db` | `deploy-production` |
 
-**Process**:
-1. Push to configured branch triggers GitHub Actions
-2. GitHub Actions authenticates with GCP service account, SSHs to VM, executes scripts
-3. `update_app.sh`: Cleans logs, fetches branch from GCP metadata, pulls latest code (hard reset), runs `deploy.sh`
-4. `deploy.sh`: Activates venv, cleans `.env`/`flask.log`, installs dependencies, generates `.env` via `get_env.py`, stops the previous app via the PID in `code/zero.pid` (SIGTERM, then SIGKILL after 10s), starts Flask on `0.0.0.0:5000` in the background, records its PID, and waits for `/health` to answer before reporting success
+**Flow** (`.github/workflows/deploy.yml`), on every push to `staging` or `main`:
 
-**Key Paths**:
-- Scripts: `/scripts/deploy.sh`, `/scripts/update_app.sh`
-- App: `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/`
-- Logs: `/var/log/update_app.log`, `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log`
+1. **test** - runs `pytest` against a throwaway PostgreSQL. A red test stops the deploy.
+2. **build** - `docker build` from the root `Dockerfile`, pushed to Artifact
+   Registry as `<region>-docker.pkg.dev/<project>/zero-sales-agent/zero-sales-agent:<commit sha>`.
+3. **deploy** - `gcloud run deploy` of a new revision **with no traffic**, tagged `candidate`.
+4. **smoke test** - `GET /health` on the candidate URL must return 200
+   (app up *and* database reachable). If not, the job fails and users stay on
+   the previous revision.
+5. **promote** - all traffic moves to the new revision.
+6. **schedule** - the Cloud Scheduler job for the periodic summary is created
+   or updated to point at the service (see below).
 
-**Environment**: Secrets stored in GitHub (service account key, VM IP, project ID, DB credentials, API keys)
+The first deploy of a service has nothing to protect, so it goes straight to
+100% traffic; steps 3 and 5 apply from the second deploy on.
 
+You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run workflow*, pick the branch.
 
-## Monitoring Deployments
+**Configuration**
 
-**GitHub Actions**: Navigate to Actions tab → select workflow run → view stages and logs. Check for green checkmarks and typical 1-3 min duration.
+- **Secrets** come from Secret Manager, mounted as environment variables by
+  Cloud Run - nothing is written to disk and there is no `.env` in the image:
 
-**Health Check**:
+  | Env var | Secret Manager secret |
+  |---|---|
+  | `GROQ_API_KEY` | `GROQ_API_KEY` |
+  | `DATABASE_URL` | `POSTGRES_URL` |
+  | `SLACK_WEBHOOK_URL` | `SLACK_WEBHOOK_URL` |
+
+  A new secret version is picked up by the next deploy (or new instance).
+- **Plain settings** (`APP_ENV`, `SCHEDULER_ENABLED=false`, the job auth
+  settings, `GROQ_MODEL_NAME`, ...) are written by the *Write service
+  environment* step of the workflow. Every setting and its default is
+  declared in `code/config.py`; `code/.env.example` lists them.
+- **Sizing**: 1 vCPU, 1 GiB, 8 concurrent requests per instance (= gunicorn's
+  8 threads; `CLOUD_RUN_CONCURRENCY` to change it), 900s request timeout. Production keeps 1 warm instance (`min-instances=1`) so the
+  chat widget never hits a cold start; staging scales to zero.
+  `max-instances` is 3 (`CLOUD_RUN_MAX_INSTANCES` to change it): every
+  instance opens up to `DB_POOL_MAX_SIZE` (2) connections, so the shared
+  database sees at most 6 from each service.
+
+**GitHub settings used by the workflow**
+
+| Where | Name | Notes |
+|---|---|---|
+| Secret in the `deploy-staging` environment (used by both branches) | `GCP_PROJECT` | `ai-agent-boilerplate0` |
+| Secret in the `deploy-staging` environment (used by both branches) | `GCP_SA_KEY` | JSON key of `github-deployer@` |
+| Repository variable (optional) | `GCP_REGION` | default `us-central1` |
+| Repository variable (optional) | `CLOUD_RUN_MAX_INSTANCES` | default `3` |
+| Repository variable (optional) | `VPC_NETWORK`, `VPC_SUBNET` | default `default`; `none` turns VPC egress off |
+| Repository variable (optional) | `PERIODIC_SUMMARY_CRON` | default `0 * * * *` (Asia/Kolkata) |
+| Repository variable (optional) | `CLOUD_RUN_CONCURRENCY` | default `8`; keep it equal to gunicorn's `--threads` |
+| Repository variable | `CLOUD_SCHEDULER_ENABLED` | the summary job runs only when this is `true`; paused otherwise. Set it once the VMs are stopped |
+| Repository variable (optional) | `GROQ_MODEL_NAME` | default `openai/gpt-oss-120b` |
+
+## One-time Setup
+
+Run once per GCP project, as a project Owner:
+
 ```bash
-curl http://<VM_EXTERNAL_IP>:5000/health
+PROJECT_ID=ai-agent-boilerplate0 REGION=us-central1 \
+DEPLOY_SA=github-deployer@ai-agent-boilerplate0.iam.gserviceaccount.com \
+./scripts/gcp_setup.sh
+```
+
+(Done for `ai-agent-boilerplate0` on 4 Nov 2026.)
+
+It enables the Cloud Run, Artifact Registry, Cloud Scheduler and Secret
+Manager APIs, creates the `zero-sales-agent` image repository, and creates two
+service accounts:
+
+- `zero-sales-agent-run@` - what the service runs as. Can read the three secrets, nothing else.
+- `zero-scheduler@` - what Cloud Scheduler signs its calls as. Has no roles at all;
+  the app trusts it by email.
+
+and gives the deploy account `run.admin`, `artifactregistry.writer`,
+`cloudscheduler.admin`, and *act as* on those two accounts. The script is
+safe to run again.
+
+Both branches deploy with the existing `deploy-staging` GitHub environment, as
+the VM workflow did. To gate production deploys behind an approval, create a
+`deploy-production` environment with the same two secrets and *required
+reviewers*, and select it for `main` in the workflow's `environment:` line.
+
+### Database access
+
+The database is the Cloud SQL instance `ai-agent-db`, on a private IP only.
+The service reaches it through Direct VPC egress on the `default`
+network/subnet (private ranges only; Groq and Slack go out directly), the same
+way the project's other Cloud Run services do. `POSTGRES_URL` holds the
+private IP. If the database cannot be reached, the deploy fails at the smoke
+test and no traffic moves.
+
+## Periodic Summary Job
+
+On a VM the summary ran on an in-process APScheduler timer. Cloud Run only
+gives an instance CPU while it serves a request and can stop it at any time,
+so that timer is not reliable there. Instead:
+
+```
+Cloud Scheduler ──(hourly, OIDC token)──▶ POST /jobs/periodic-summary ──▶ periodic_summary()
+```
+
+- `SCHEDULER_ENABLED=false` on Cloud Run turns the in-process timer off.
+  Locally it is still on by default, so `python app.py` behaves as before.
+- The job is `zero-sales-agent[-staging]-periodic-summary`, in the same
+  region, cron `0 * * * *` in Asia/Kolkata. The workflow creates or updates it
+  on every deploy, so the schedule lives in the repo, not in the console.
+- **Paused by default**: the job runs only if the repository variable
+  `CLOUD_SCHEDULER_ENABLED` is `true`. Each deploy pauses or resumes it to
+  match, and fails if it cannot. Pausing or resuming by hand in the console
+  is undone by the next deploy.
+- **Auth**: the service is public (the chat widget calls it from browsers), so
+  the endpoint checks the token itself (`code/api/jobs.py`): a Google-signed
+  OIDC token, audience `JOBS_OIDC_AUDIENCE` (`<service>-jobs`), email in
+  `JOBS_ALLOWED_INVOKERS` (`zero-scheduler@`). Anything else gets 401.
+  With either setting unset, every call is refused.
+- **One run at a time**: the run holds a PostgreSQL advisory lock on a
+  dedicated connection, so a manual run or a second instance cannot overlap
+  it; an overlapping call answers 409 and does nothing.
+- **Responses**: 200 with counts only (no visitor data), 409 already
+  running, 500 the run failed, 503 database unreachable. Failed sessions are
+  retried on the next run anyway.
+
+Run it now, without waiting for the hour:
+
+```bash
+gcloud scheduler jobs run zero-sales-agent-staging-periodic-summary --location us-central1
+```
+
+## Moving Off the VMs
+
+The workflow no longer touches the VMs.
+
+**No DNS change.** The browser calls the API on `api.smalltech.in` /
+`api-staging.smalltech.in` (also under `/zero/`), which already point at the
+shared HTTPS load balancer `staging-lb` (url map `https-staging`). The cutover
+swaps the backend behind those routes from the VM to Cloud Run, which is
+instant and reversible. `zero.smalltech.in` / `zero-staging.smalltech.in`
+are the dashboards (GitHub Pages / Vercel) and stay as they are. The load
+balancer and the VMs also serve other apps (webscraper, hashtaglocal,
+ir-agent): **do not change DNS or stop the VMs**; only the Zer0 app on them
+goes away.
+
+1. One-time GCP setup (done) and `./scripts/lb_cutover.sh prepare`: serverless
+   NEGs and backend services for both services, no traffic yet. Leave
+   `CLOUD_SCHEDULER_ENABLED` unset: the VMs still run their own hourly
+   summary, and Cloud Scheduler must not run one as well.
+2. Merge to `staging`. Check the staging service URL (in the job summary):
+   `/health`, the chat widget, `/api/docs`.
+3. `./scripts/lb_cutover.sh switch staging`. It checks the service's
+   `/health`, swaps only the Zer0 staging backend in the url map (keeping a
+   backup of the old one), and waits for
+   `https://api-staging.smalltech.in/health`.
+4. **Merge to `main` and run `./scripts/lb_cutover.sh switch production` in
+   the same sitting.** From the merge on, `main` no longer reaches the
+   production VM: until the switch, users get the code from before the
+   merge. Merge nothing else to `main` in between.
+5. Stop the Zer0 app on both VMs, so their in-process summary stops (the
+   VMs keep running for the other apps): on each VM
+   `sudo pkill -f "flask run --host=0.0.0.0 --port=5000"`, and take
+   `update_app.sh` out of the VM's startup so a reboot does not start it again.
+6. Set the repository variable `CLOUD_SCHEDULER_ENABLED=true` and re-run the
+   deploy of both branches (Actions → *Run workflow*): this resumes both
+   jobs. Trigger one run by hand (above) and check Slack.
+7. After a week without problems, delete the VM backend services
+   (`staging-backend`, `https-backend` and their NEG / instance-group
+   entries) and the legacy scripts (`scripts/deploy.sh`,
+   `scripts/update_app.sh`, `code/get_env.py`).
+
+To go back to a VM: `./scripts/lb_cutover.sh rollback staging|production`
+(start the Zer0 app on the VM first if it was stopped), and unset
+`CLOUD_SCHEDULER_ENABLED`, then re-run the deploy, which pauses the jobs.
+
+## Monitoring
+
+**GitHub Actions**: Actions tab → *Deploy to Cloud Run*. Each run's summary
+shows the service URL and the image.
+
+**Health check**:
+```bash
+curl https://<service-url>/health
 # 200 when the database is reachable, 503 when it is not:
-# {"message":"Hello World","database":"connected",
-#  "pool":{"min_size":1,"max_size":2,"size":2,"available":2,"waiting":0,"connections_lost":0}}
+# {"message":"Hello World","database":"connected","pool":{...}}
 ```
 
 The probe runs through the same connection pool the chat and prompt endpoints
@@ -44,68 +213,64 @@ use, so a green health check means those endpoints can reach the database too.
 `database: disconnected` with the app still answering is the expected state
 during a database outage - the app stays up and reconnects by itself.
 
-**On VM**:
+**Logs** (everything the app prints goes to Cloud Logging):
 ```bash
-ps aux | grep flask                                                        # Process running
-tail -f /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log  # Live logs
-top                                                                        # CPU/memory
-df -h                                                                      # Disk space
-netstat -tulpn | grep 5000                                                # Network
-psql -U <username> -d <database_name> -c "SELECT 1;"                      # DB connection
+gcloud run services logs tail zero-sales-agent --region us-central1        # live
+gcloud run services logs read zero-sales-agent --region us-central1 --limit 200
+```
+Or Cloud Console → Cloud Run → service → *Logs*. Metrics (requests, latency,
+instances, memory) are on the *Metrics* tab.
+
+**Summary job**: Cloud Console → Cloud Scheduler shows the last run and its
+HTTP status; the details are in the service logs under `[JOBS]` and
+`[PERIODIC_SUMMARY]`.
+
+## Rollback
+
+Every deploy is a revision, and the previous ones stay available:
+
+```bash
+gcloud run revisions list --service zero-sales-agent --region us-central1
+gcloud run services update-traffic zero-sales-agent --region us-central1 \
+  --to-revisions <revision-name>=100
 ```
 
+The next push to the branch deploys normally again and moves traffic to it.
+Or revert the commit and let the workflow deploy the revert.
 
+## Debugging
 
-## Debugging Issues
+**Deploy fails**
 
-**SSH Access** (macOS):
+| Step | Usual cause |
+|---|---|
+| test | A real test failure - run `pytest` locally |
+| Build and push image | Artifact Registry repo missing (run `gcp_setup.sh`) or `artifactregistry.writer` missing |
+| Deploy to Cloud Run | `run.admin` / *act as* on `zero-sales-agent-run@` missing; a secret missing or not readable by the runtime account |
+| Smoke test | The revision starts but `/health` is not 200: almost always the database is not reachable from Cloud Run (see *Database access*). The step prints the `/health` body |
+| Cloud Scheduler | `cloudscheduler.admin` or *act as* on `zero-scheduler@` missing |
+
+**App not starting** - the revision's logs show the traceback:
 ```bash
-brew install --cask google-cloud-sdk  # Install gcloud
-gcloud init                            # Initialize
-gcloud config set project ai-agent-boilerplate0
-gcloud compute ssh ai-agent-staging --zone=us-central1-c
+gcloud run services logs read zero-sales-agent-staging --region us-central1 --limit 100
 ```
 
-### Common Issues
-
-**1. Deployment Fails (GitHub Actions)**
-- Check Actions tab → failed workflow → expand step
-- Causes: Auth failure (verify service account key in secrets), SSH timeout (check VM/firewall), permissions (verify roles)
-
-**2. Application Not Starting**
+**Run the production image locally**
 ```bash
-gcloud compute ssh ai-agent-staging --zone=us-central1-c
-ps aux | grep flask
-cat /var/log/update_app.log
-sudo su # to access /home/vivek
-cat /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
-# Manual start:
-cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code
-source ../venv/bin/activate
-export FLASK_APP=app.py
-flask run --host=0.0.0.0 --port=5000
+docker build -t zero .
+docker run --rm -p 8080:8080 \
+  -e APP_ENV=local -e SCHEDULER_ENABLED=false \
+  -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/ \
+  -e GROQ_API_KEY=... zero
+curl localhost:8080/health
 ```
 
-**3. Application Crashes**
-```bash
-tail -f /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
-cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code
-source ../venv/bin/activate
-python3 -c "import app"  # Test import
-cat .env                  # Verify variables
-python3 -c "from db import ping; ping(); print('DB OK')"  # Test DB via the pool
-```
+**Summary job returns 401** - the scheduler job's audience or service account
+does not match the service's `JOBS_OIDC_AUDIENCE` / `JOBS_ALLOWED_INVOKERS`.
+Re-running the deploy sets both sides again. The log line `[JOBS] periodic
+summary refused: ...` says which check failed.
 
-**4. Missing Dependencies**
-```bash
-cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate
-source venv/bin/activate
-pip list
-cd code && pip install -r requirements.txt
-../scripts/deploy.sh
-```
-
-**5. Database Connection Errors**
+## Database Connections
 
 The app does not need a restart after a PostgreSQL restart. All database access
 goes through a connection pool that validates connections before use and
@@ -122,7 +287,7 @@ other request. A background thread also calls the pool's `check()` every
 `DB_STARTUP_WAIT` seconds for the schema, then serves regardless, so `/health`
 answers 503 within seconds rather than the process hanging. A background thread
 keeps retrying and creates the schema as soon as the database appears - watch
-for `Database schema ready` in `flask.log`.
+for `Database schema ready` in the logs.
 
 Measured behaviour during a full outage:
 
@@ -133,15 +298,12 @@ Measured behaviour during a full outage:
 | The process | stays up and answering | no restart needed |
 
 ```bash
-sudo systemctl status postgresql
-sudo systemctl start postgresql
-psql -U <username> -d <database_name>
-sudo tail -f /var/log/postgresql/postgresql-*.log
-cat /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/.env | grep DB
-
 # What the app itself thinks:
-curl -s http://localhost:5000/health | python3 -m json.tool
-grep -E "Database unreachable|lost connection|reconnect"   /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
+curl -s https://<service-url>/health | python3 -m json.tool
+gcloud logging read 'resource.type="cloud_run_revision"
+  AND resource.labels.service_name="zero-sales-agent"
+  AND textPayload=~"Database unreachable|lost connection|reconnect"' \
+  --limit 50 --freshness 1h
 ```
 
 **Connection pool settings.** Every environment-driven setting in this app is
@@ -193,7 +355,7 @@ caps each query at 10s and the request fails rather than parking forever. A
 statement that hits that ceiling is deliberately **not** retried - re-running a
 query against a database that is already struggling is how a slow database
 becomes a down one. Look for `canceling statement due to statement timeout` in
-`flask.log`; it means the database needs attention, not the app.
+the logs; it means the database needs attention, not the app.
 
 **Before raising or lowering it**, note the constraint that makes 2 safe: no
 request may hold two connections at once. Two such requests would take one
@@ -202,101 +364,18 @@ and `db_pool` logs a warning with a stack trace if it ever happens at runtime.
 Lowering to 1 is not advised - a queued request would then sit behind any slow
 query with nothing else to run on.
 
-**6. Port Already in Use**
 
-`deploy.sh` stops the previous app using the PID in `code/zero.pid`. If that
-file is missing or stale the old process survives and the new one cannot bind.
+## Legacy: VM Deploy
 
-```bash
-cat /opt/ai-agent-boilerplate/code/zero.pid   # what deploy.sh thinks is running
-sudo lsof -i :5000                            # what actually holds the port
-sudo kill <PID>                               # SIGTERM: the app closes its DB pool
-sudo kill -9 <PID>                            # only if it ignores SIGTERM
-cd /opt/ai-agent-boilerplate && ./scripts/deploy.sh
-```
-
-`zero.pid` is in `.gitignore` on purpose, not for tidiness: `update_app.sh`
-runs `git clean -fd` before `deploy.sh`, which deletes untracked files. If the
-PID file went with them, nothing would be stopped, the new process could not
-bind port 5000, and the old code would keep serving while the deploy reported
-success.
-
-A stale `zero.pid` is the one case to watch. After a reboot the recorded PID
-can belong to an unrelated process, and `deploy.sh` runs as root, so there is
-no permission check to stop the kill. If the app has just restarted and
-something else on the box died at the same time, check this first:
-
-```bash
-cat /opt/ai-agent-boilerplate/code/zero.pid
-ps -p "$(cat /opt/ai-agent-boilerplate/code/zero.pid)" -o pid=,args=
-```
-
-### Complete Debugging Checklist
-
-### Complete Debugging Checklist
+Until the VMs are deleted, `scripts/update_app.sh` and `scripts/deploy.sh`
+still run on them at boot. Nothing triggers them any more, and they read the
+branch from the instance metadata, so a VM keeps serving the last code it
+pulled. To look at one:
 
 ```bash
 gcloud compute ssh <VM_INSTANCE_NAME> --zone=<ZONE>
-uptime && df -h && free -m                    # System status
-ps aux | grep flask                           # Process
-tail -100 /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
-tail -100 /var/log/update_app.log
-cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate && git status && git log -1 && ls -la code/
-cat code/.env | grep -v "PASSWORD\|SECRET\|KEY"  # Environment (safe)
-source venv/bin/activate && cd code && export FLASK_APP=app.py && python3 -c "import app; print('Import successful')"
-curl http://localhost:5000/health
-sudo iptables -L -n                           # Firewall
+tail -100 /opt/ai-agent-boilerplate/code/flask.log
 ```
 
-**Log Locations**:
-- Update: `/var/log/update_app.log`
-- Flask: `/home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log`
-- PostgreSQL: `/var/log/postgresql/postgresql-*.log`
-- System: `/var/log/syslog`
-
-**Collect Diagnostics**:
-```bash
-# On VM:
-{ echo "=== System ===" && uname -a && echo "=== Disk ===" && df -h && \
-  echo "=== Memory ===" && free -m && echo "=== Processes ===" && ps aux | grep -E 'flask|python' && \
-  echo "=== Flask Log ===" && tail -50 /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
-} > ~/debug-info.txt
-# Local: gcloud compute scp <VM_INSTANCE_NAME>:~/debug-info.txt . --zone=<ZONE>
-```
-
-## Best Practices
-
-**Before Deploy**: Test locally, update `requirements.txt`, commit all files, descriptive messages  
-**After Deploy**: Monitor Actions, check health endpoint, review logs, test APIs  
-**Maintenance**: Rotate logs weekly, update dependencies monthly, monitor resources
-
-## Quick Reference
-
-```bash
-# Deploy manually
-cd /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate && ./scripts/deploy.sh
-
-# Live logs
-tail -f /home/vivek/Ai-agent-boilerplate/ai-agent-boilerplate/code/flask.log
-
-# Restart (deploy.sh stops the old process by PID and starts a new one)
-cd /opt/ai-agent-boilerplate && ./scripts/deploy.sh
-
-# Health check
-curl http://localhost:5000/health
-
-# SSH
-gcloud compute ssh <VM_INSTANCE_NAME> --zone=<ZONE>
-```
-
-## Storage cleaning
-
-```bash
-# Clean cache
-sudo apt clean
-
-# Clear logs
-sudo journalctl --vacuum-size=200M
-```
 ---
-*Last Updated: Feb 2026*
+*Last Updated: Nov 2026*

@@ -16,3 +16,7 @@ pytest==8.4.2
 pytest-html==4.1.1
 ruff==0.14.14
 apscheduler==3.11.0
+gunicorn==23.0.0
+# Verifies the Cloud Scheduler OIDC token in api/jobs.py. Pinned on purpose:
+# it used to arrive only through google-cloud-secret-manager.
+google-auth==2.62.1
