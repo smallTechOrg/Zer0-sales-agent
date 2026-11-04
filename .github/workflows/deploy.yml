@@ -57,9 +57,11 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    # Each GitHub environment holds GCP_PROJECT and GCP_SA_KEY. Add protection
-    # rules (required reviewers) on deploy-production if you want a gate.
-    environment: ${{ github.ref_name == 'main' && 'deploy-production' || 'deploy-staging' }}
+    # The deploy-staging GitHub environment holds GCP_PROJECT and GCP_SA_KEY
+    # (the github-deployer service account) and serves both branches, as the
+    # VM workflow did. To gate production deploys, create deploy-production
+    # with the same secrets and required reviewers, and select it for main.
+    environment: deploy-staging
     env:
       APP_ENV: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
       SERVICE: ${{ github.ref_name == 'main' && 'zero-sales-agent' || 'zero-sales-agent-staging' }}
@@ -78,6 +80,11 @@ jobs:
       # posts). Turn it on once the VMs are stopped.
       SCHEDULER_JOB_ENABLED: ${{ vars.CLOUD_SCHEDULER_ENABLED || 'false' }}
       SUMMARY_CRON: ${{ vars.PERIODIC_SUMMARY_CRON || '0 * * * *' }}
+      # The database (Cloud SQL ai-agent-db) has only a private IP, so the
+      # service reaches it through Direct VPC egress, like the project's other
+      # Cloud Run services. Set VPC_NETWORK to "none" to turn this off.
+      VPC_NETWORK: ${{ vars.VPC_NETWORK || 'default' }}
+      VPC_SUBNET: ${{ vars.VPC_SUBNET || vars.VPC_NETWORK || 'default' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -138,9 +145,10 @@ jobs:
             --labels "app=zero-sales-agent,env=${APP_ENV},commit=${GITHUB_SHA::12}"
             --quiet
           )
-          # Optional: reach a database on a private IP through Direct VPC egress.
-          if [ -n "${{ vars.VPC_NETWORK }}" ]; then
-            args+=(--network "${{ vars.VPC_NETWORK }}" --subnet "${{ vars.VPC_SUBNET || vars.VPC_NETWORK }}" --vpc-egress private-ranges-only)
+          # Reach the database's private IP through Direct VPC egress. Only
+          # private ranges go through the VPC; Groq and Slack go out directly.
+          if [ "$VPC_NETWORK" != "none" ]; then
+            args+=(--network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only)
           fi
 
           if gcloud run services describe "$SERVICE" --region "$REGION" >/dev/null 2>&1; then

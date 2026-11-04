@@ -67,11 +67,11 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
 
 | Where | Name | Notes |
 |---|---|---|
-| Environment secret (both environments) | `GCP_PROJECT` | e.g. `ai-agent-boilerplate0` |
-| Environment secret (both environments) | `GCP_SA_KEY` | JSON key of the deploy service account |
+| Secret in the `deploy-staging` environment (used by both branches) | `GCP_PROJECT` | `ai-agent-boilerplate0` |
+| Secret in the `deploy-staging` environment (used by both branches) | `GCP_SA_KEY` | JSON key of `github-deployer@` |
 | Repository variable (optional) | `GCP_REGION` | default `us-central1` |
 | Repository variable (optional) | `CLOUD_RUN_MAX_INSTANCES` | default `3` |
-| Repository variable (optional) | `VPC_NETWORK`, `VPC_SUBNET` | set if the database is only reachable on a private IP |
+| Repository variable (optional) | `VPC_NETWORK`, `VPC_SUBNET` | default `default`; `none` turns VPC egress off |
 | Repository variable (optional) | `PERIODIC_SUMMARY_CRON` | default `0 * * * *` (Asia/Kolkata) |
 | Repository variable (optional) | `CLOUD_RUN_CONCURRENCY` | default `8`; keep it equal to gunicorn's `--threads` |
 | Repository variable | `CLOUD_SCHEDULER_ENABLED` | the summary job runs only when this is `true`; paused otherwise. Set it once the VMs are stopped |
@@ -83,9 +83,11 @@ Run once per GCP project, as a project Owner:
 
 ```bash
 PROJECT_ID=ai-agent-boilerplate0 REGION=us-central1 \
-DEPLOY_SA=<email of the service account in GCP_SA_KEY> \
+DEPLOY_SA=github-deployer@ai-agent-boilerplate0.iam.gserviceaccount.com \
 ./scripts/gcp_setup.sh
 ```
+
+(Done for `ai-agent-boilerplate0` on 4 Nov 2026.)
 
 It enables the Cloud Run, Artifact Registry, Cloud Scheduler and Secret
 Manager APIs, creates the `zero-sales-agent` image repository, and creates two
@@ -99,27 +101,19 @@ and gives the deploy account `run.admin`, `artifactregistry.writer`,
 `cloudscheduler.admin`, and *act as* on those two accounts. The script is
 safe to run again.
 
-Then in GitHub → Settings → Environments, create `deploy-production` (the old
-workflow used `deploy-staging` for both) and give it `GCP_PROJECT` and
-`GCP_SA_KEY`. Adding *required reviewers* there turns every production deploy
-into a one-click approval.
+Both branches deploy with the existing `deploy-staging` GitHub environment, as
+the VM workflow did. To gate production deploys behind an approval, create a
+`deploy-production` environment with the same two secrets and *required
+reviewers*, and select it for `main` in the workflow's `environment:` line.
 
 ### Database access
 
-Cloud Run does not have the VM's fixed IP. The database must accept
-connections from the service, in one of these ways:
-
-- **Private IP (recommended)**: if the database is on a VM or Cloud SQL in the
-  same VPC, set the repository variables `VPC_NETWORK` (and `VPC_SUBNET`).
-  The workflow then turns on Direct VPC egress for private ranges, and
-  `POSTGRES_URL` should use the private IP. Allow the subnet's range on 5432 in
-  the firewall / `pg_hba.conf`.
-- **Public IP**: the outbound IP of Cloud Run is not fixed. Either route egress
-  through Cloud NAT with a reserved IP and allow-list that, or use Cloud SQL
-  with the Cloud SQL connector.
-
-If the database cannot be reached, the deploy fails at the smoke test and no
-traffic moves.
+The database is the Cloud SQL instance `ai-agent-db`, on a private IP only.
+The service reaches it through Direct VPC egress on the `default`
+network/subnet (private ranges only; Groq and Slack go out directly), the same
+way the project's other Cloud Run services do. `POSTGRES_URL` holds the
+private IP. If the database cannot be reached, the deploy fails at the smoke
+test and no traffic moves.
 
 ## Periodic Summary Job
 
@@ -160,38 +154,47 @@ gcloud scheduler jobs run zero-sales-agent-staging-periodic-summary --location u
 
 ## Moving Off the VMs
 
-The workflow no longer touches the VMs. To switch over with no gap and no
-double Slack posts:
+The workflow no longer touches the VMs.
 
-1. Run `scripts/gcp_setup.sh`, add the GitHub settings above and sort out
-   *Database access*. Leave `CLOUD_SCHEDULER_ENABLED` unset: the VMs still run
-   their own hourly summary, and Cloud Scheduler must not run one as well.
-2. A day ahead, lower the TTL of the `zero-staging` and `zero` DNS records
-   (e.g. 300s), so the switch and a switch back take effect quickly.
-3. Merge to `staging`. Check the staging service URL (in the job summary):
+**No DNS change.** The browser calls the API on `api.smalltech.in` /
+`api-staging.smalltech.in` (also under `/zero/`), which already point at the
+shared HTTPS load balancer `staging-lb` (url map `https-staging`). The cutover
+swaps the backend behind those routes from the VM to Cloud Run, which is
+instant and reversible. `zero.smalltech.in` / `zero-staging.smalltech.in`
+are the dashboards (GitHub Pages / Vercel) and stay as they are. The load
+balancer and the VMs also serve other apps (webscraper, hashtaglocal,
+ir-agent): **do not change DNS or stop the VMs**; only the Zer0 app on them
+goes away.
+
+1. One-time GCP setup (done) and `./scripts/lb_cutover.sh prepare`: serverless
+   NEGs and backend services for both services, no traffic yet. Leave
+   `CLOUD_SCHEDULER_ENABLED` unset: the VMs still run their own hourly
+   summary, and Cloud Scheduler must not run one as well.
+2. Merge to `staging`. Check the staging service URL (in the job summary):
    `/health`, the chat widget, `/api/docs`.
-4. Point `zero-staging.smalltech.in` at the staging service (Cloud Run domain
-   mapping, or a load balancer with a serverless NEG). Google issues the
-   TLS certificate only after DNS points at it, so expect some minutes of
-   certificate errors; time it for this on production too. Once it answers
-   over HTTPS, stop the staging VM.
-5. **Merge to `main` and move `zero.smalltech.in` in the same sitting.** From
-   the merge on, `main` no longer reaches the production VM: until DNS
-   moves, users get the code from before the merge, and both versions write
-   to `prod_chat_db`. Merge nothing else to `main` in between. Once the domain
-   answers from Cloud Run, stop the production VM.
-6. With both VMs stopped, set the repository variable
-   `CLOUD_SCHEDULER_ENABLED=true` and re-run the deploy of both branches
-   (Actions → *Run workflow*): this resumes both jobs. Trigger one run by
-   hand (above) and check Slack.
-7. After a week without problems, delete the VMs and the legacy scripts
-   (`scripts/deploy.sh`, `scripts/update_app.sh`, `code/get_env.py`).
+3. `./scripts/lb_cutover.sh switch staging`. It checks the service's
+   `/health`, swaps only the Zer0 staging backend in the url map (keeping a
+   backup of the old one), and waits for
+   `https://api-staging.smalltech.in/health`.
+4. **Merge to `main` and run `./scripts/lb_cutover.sh switch production` in
+   the same sitting.** From the merge on, `main` no longer reaches the
+   production VM: until the switch, users get the code from before the
+   merge. Merge nothing else to `main` in between.
+5. Stop the Zer0 app on both VMs, so their in-process summary stops (the
+   VMs keep running for the other apps): on each VM
+   `sudo pkill -f "flask run --host=0.0.0.0 --port=5000"`, and take
+   `update_app.sh` out of the VM's startup so a reboot does not start it again.
+6. Set the repository variable `CLOUD_SCHEDULER_ENABLED=true` and re-run the
+   deploy of both branches (Actions → *Run workflow*): this resumes both
+   jobs. Trigger one run by hand (above) and check Slack.
+7. After a week without problems, delete the VM backend services
+   (`staging-backend`, `https-backend` and their NEG / instance-group
+   entries) and the legacy scripts (`scripts/deploy.sh`,
+   `scripts/update_app.sh`, `code/get_env.py`).
 
-To go back to a VM during the cutover: start it, point DNS back at it and
-unset `CLOUD_SCHEDULER_ENABLED` (then re-run the deploy, which pauses the jobs).
-
-Browsers call the API by its domain, so the chat widget needs no change as
-long as the domains are kept.
+To go back to a VM: `./scripts/lb_cutover.sh rollback staging|production`
+(start the Zer0 app on the VM first if it was stopped), and unset
+`CLOUD_SCHEDULER_ENABLED`, then re-run the deploy, which pauses the jobs.
 
 ## Monitoring
 

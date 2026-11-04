@@ -38,14 +38,16 @@ gcloud artifacts repositories describe "$AR_REPOSITORY" --location "$REGION" >/d
 
 # Keep the image store small: delete images older than 30 days, but always
 # keep the 20 newest so a rollback target is there.
-cat > /tmp/zero-ar-cleanup.json <<'EOF'
+POLICY_FILE="$(mktemp)"
+trap 'rm -f "$POLICY_FILE"' EXIT
+cat > "$POLICY_FILE" <<'EOF'
 [
   {"name": "keep-recent", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 20}},
   {"name": "delete-old", "action": {"type": "Delete"}, "condition": {"olderThan": "30d"}}
 ]
 EOF
 gcloud artifacts repositories set-cleanup-policies "$AR_REPOSITORY" \
-  --location "$REGION" --policy /tmp/zero-ar-cleanup.json >/dev/null
+  --location "$REGION" --policy "$POLICY_FILE" >/dev/null
 
 create_sa() {
   local email="$1" display="$2"
@@ -81,13 +83,8 @@ done
 cat <<EOF
 
 Done. Next:
-  1. In GitHub > Settings > Environments, make sure both deploy-staging and
-     deploy-production have the secrets GCP_PROJECT and GCP_SA_KEY.
-  2. Optional repository variables: GCP_REGION (default us-central1),
-     VPC_NETWORK / VPC_SUBNET (if the database is only on a private IP),
-     CLOUD_SCHEDULER_ENABLED=true only once the VMs are stopped (until then the
-     summary job stays paused; see DEPLOYMENT.md).
-  3. Make sure the database accepts connections from Cloud Run
-     (see "Database access" in DEPLOYMENT.md).
-  4. Push to staging.
+  1. ./scripts/lb_cutover.sh prepare  (load balancer backends, no traffic)
+  2. Merge to staging, then ./scripts/lb_cutover.sh switch staging.
+  3. CLOUD_SCHEDULER_ENABLED=true only once the Zer0 app on the VMs is
+     stopped (until then the summary job stays paused; see DEPLOYMENT.md).
 EOF
