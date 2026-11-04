@@ -1,3 +1,5 @@
+# LEGACY: VM deploy only (writes .env for scripts/deploy.sh). Cloud Run mounts
+# the same secrets as environment variables instead - see DEPLOYMENT.md.
 from google.cloud import secretmanager
 import sys
 
