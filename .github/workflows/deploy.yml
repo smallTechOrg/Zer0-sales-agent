@@ -69,6 +69,15 @@ jobs:
       # Each instance opens up to DB_POOL_MAX_SIZE (2) connections on the
       # shared database: this caps the total at 2 x MAX_INSTANCES.
       MAX_INSTANCES: ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
+      # Requests one instance takes at once. Matches gunicorn's --threads 8 in
+      # the Dockerfile: more would only queue inside gunicorn (and fight over
+      # the 2 pooled DB connections) instead of making Cloud Run scale out.
+      CONCURRENCY: ${{ vars.CLOUD_RUN_CONCURRENCY || '8' }}
+      # The summary job stays paused unless this is "true". Off by default so
+      # it never runs alongside the VMs' own in-process summary (double Slack
+      # posts). Turn it on once the VMs are stopped.
+      SCHEDULER_JOB_ENABLED: ${{ vars.CLOUD_SCHEDULER_ENABLED || 'false' }}
+      SUMMARY_CRON: ${{ vars.PERIODIC_SUMMARY_CRON || '0 * * * *' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -119,7 +128,7 @@ jobs:
             --port 8080
             --cpu 1
             --memory 1Gi
-            --concurrency 40
+            --concurrency "$CONCURRENCY"
             --timeout 900
             --cpu-boost
             --min-instances "$MIN_INSTANCES"
@@ -173,7 +182,6 @@ jobs:
           JOB="${SERVICE}-periodic-summary"
           args=(
             --location "$REGION"
-            --schedule "${{ vars.PERIODIC_SUMMARY_CRON || '0 * * * *' }}"
             --time-zone "Asia/Kolkata"
             --uri "${URL}/jobs/periodic-summary"
             --http-method POST
@@ -183,20 +191,38 @@ jobs:
             --description "Periodic chat summary to Slack for ${SERVICE} (managed by GitHub Actions)"
             --quiet
           )
-          if gcloud scheduler jobs describe "$JOB" --location "$REGION" >/dev/null 2>&1; then
-            gcloud scheduler jobs update http "$JOB" "${args[@]}"
-          else
-            gcloud scheduler jobs create http "$JOB" "${args[@]}"
-          fi
+          job_state() {
+            gcloud scheduler jobs describe "$JOB" --location "$REGION" --format='value(state)' 2>/dev/null || true
+          }
 
-          # Pause while the old VM still runs its own in-process scheduler, so
-          # Slack does not get every summary twice during the cutover.
-          if [ "${{ vars.CLOUD_SCHEDULER_PAUSED }}" = "true" ]; then
-            gcloud scheduler jobs pause "$JOB" --location "$REGION" --quiet || true
-            echo "::warning::$JOB is paused (CLOUD_SCHEDULER_PAUSED=true)."
-          else
-            gcloud scheduler jobs resume "$JOB" --location "$REGION" --quiet || true
+          if [ -z "$(job_state)" ]; then
+            # New job: a created job starts ENABLED. Create it on a schedule
+            # that cannot fire soon (1 January) and pause it at once, so it
+            # never runs before the state below is decided.
+            gcloud scheduler jobs create http "$JOB" "${args[@]}" --schedule "0 0 1 1 *"
+            gcloud scheduler jobs pause "$JOB" --location "$REGION" --quiet
           fi
+          gcloud scheduler jobs update http "$JOB" "${args[@]}" --schedule "$SUMMARY_CRON"
+
+          # Paused unless CLOUD_SCHEDULER_ENABLED=true: while the VMs still run
+          # their in-process summary, a running job would double every Slack
+          # post. No "|| true": a pause that fails must fail the deploy.
+          if [ "$SCHEDULER_JOB_ENABLED" = "true" ]; then
+            want=ENABLED
+            [ "$(job_state)" = "ENABLED" ] || gcloud scheduler jobs resume "$JOB" --location "$REGION" --quiet
+          else
+            want=PAUSED
+            [ "$(job_state)" = "PAUSED" ] || gcloud scheduler jobs pause "$JOB" --location "$REGION" --quiet
+          fi
+          state=$(job_state)
+          if [ "$state" != "$want" ]; then
+            echo "::error::$JOB is $state, expected $want."
+            exit 1
+          fi
+          if [ "$want" = "PAUSED" ]; then
+            echo "::warning::$JOB is paused. Set the repository variable CLOUD_SCHEDULER_ENABLED=true once the VMs are stopped."
+          fi
+          echo "SCHEDULER_STATE=$state" >> "$GITHUB_ENV"
 
       - name: Summary
         run: |
@@ -206,4 +232,5 @@ jobs:
             echo "- URL: ${URL}"
             echo "- Image: \`${IMAGE}\`"
             echo "- Environment: ${APP_ENV}"
+            echo "- Summary job: ${SCHEDULER_STATE:-unknown}"
           } >> "$GITHUB_STEP_SUMMARY"

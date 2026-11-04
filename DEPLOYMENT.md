@@ -56,8 +56,8 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
   settings, `GROQ_MODEL_NAME`, ...) are written by the *Write service
   environment* step of the workflow. Every setting and its default is
   declared in `code/config.py`; `code/.env.example` lists them.
-- **Sizing**: 1 vCPU, 1 GiB, 40 concurrent requests per instance, 900s
-  request timeout. Production keeps 1 warm instance (`min-instances=1`) so the
+- **Sizing**: 1 vCPU, 1 GiB, 8 concurrent requests per instance (= gunicorn's
+  8 threads; `CLOUD_RUN_CONCURRENCY` to change it), 900s request timeout. Production keeps 1 warm instance (`min-instances=1`) so the
   chat widget never hits a cold start; staging scales to zero.
   `max-instances` is 3 (`CLOUD_RUN_MAX_INSTANCES` to change it): every
   instance opens up to `DB_POOL_MAX_SIZE` (2) connections, so the shared
@@ -73,7 +73,8 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
 | Repository variable (optional) | `CLOUD_RUN_MAX_INSTANCES` | default `3` |
 | Repository variable (optional) | `VPC_NETWORK`, `VPC_SUBNET` | set if the database is only reachable on a private IP |
 | Repository variable (optional) | `PERIODIC_SUMMARY_CRON` | default `0 * * * *` (Asia/Kolkata) |
-| Repository variable (optional) | `CLOUD_SCHEDULER_PAUSED` | `true` keeps the summary job paused (cutover) |
+| Repository variable (optional) | `CLOUD_RUN_CONCURRENCY` | default `8`; keep it equal to gunicorn's `--threads` |
+| Repository variable | `CLOUD_SCHEDULER_ENABLED` | the summary job runs only when this is `true`; paused otherwise. Set it once the VMs are stopped |
 | Repository variable (optional) | `GROQ_MODEL_NAME` | default `openai/gpt-oss-120b` |
 
 ## One-time Setup
@@ -135,6 +136,10 @@ Cloud Scheduler ──(hourly, OIDC token)──▶ POST /jobs/periodic-summary 
 - The job is `zero-sales-agent[-staging]-periodic-summary`, in the same
   region, cron `0 * * * *` in Asia/Kolkata. The workflow creates or updates it
   on every deploy, so the schedule lives in the repo, not in the console.
+- **Paused by default**: the job runs only if the repository variable
+  `CLOUD_SCHEDULER_ENABLED` is `true`. Each deploy pauses or resumes it to
+  match, and fails if it cannot. Pausing or resuming by hand in the console
+  is undone by the next deploy.
 - **Auth**: the service is public (the chat widget calls it from browsers), so
   the endpoint checks the token itself (`code/api/jobs.py`): a Google-signed
   OIDC token, audience `JOBS_OIDC_AUDIENCE` (`<service>-jobs`), email in
@@ -158,21 +163,32 @@ gcloud scheduler jobs run zero-sales-agent-staging-periodic-summary --location u
 The workflow no longer touches the VMs. To switch over with no gap and no
 double Slack posts:
 
-1. Run `scripts/gcp_setup.sh` and add the GitHub settings above.
-2. Set the repository variable `CLOUD_SCHEDULER_PAUSED=true`: the VMs still
-   run their own hourly summary; Cloud Scheduler must not run one as well.
+1. Run `scripts/gcp_setup.sh`, add the GitHub settings above and sort out
+   *Database access*. Leave `CLOUD_SCHEDULER_ENABLED` unset: the VMs still run
+   their own hourly summary, and Cloud Scheduler must not run one as well.
+2. A day ahead, lower the TTL of the `zero-staging` and `zero` DNS records
+   (e.g. 300s), so the switch and a switch back take effect quickly.
 3. Merge to `staging`. Check the staging service URL (in the job summary):
    `/health`, the chat widget, `/api/docs`.
 4. Point `zero-staging.smalltech.in` at the staging service (Cloud Run domain
-   mapping, or a load balancer with a serverless NEG). Once it answers there,
-   stop the staging VM.
-5. Merge to `main`, then do the same for `zero.smalltech.in` and stop the
-   production VM.
-6. Delete `CLOUD_SCHEDULER_PAUSED` (or set it to `false`) and re-run the
-   deploy of both branches - this resumes both jobs. Trigger one run by hand
-   (above) and check Slack.
+   mapping, or a load balancer with a serverless NEG). Google issues the
+   TLS certificate only after DNS points at it, so expect some minutes of
+   certificate errors; time it for this on production too. Once it answers
+   over HTTPS, stop the staging VM.
+5. **Merge to `main` and move `zero.smalltech.in` in the same sitting.** From
+   the merge on, `main` no longer reaches the production VM: until DNS
+   moves, users get the code from before the merge, and both versions write
+   to `prod_chat_db`. Merge nothing else to `main` in between. Once the domain
+   answers from Cloud Run, stop the production VM.
+6. With both VMs stopped, set the repository variable
+   `CLOUD_SCHEDULER_ENABLED=true` and re-run the deploy of both branches
+   (Actions → *Run workflow*): this resumes both jobs. Trigger one run by
+   hand (above) and check Slack.
 7. After a week without problems, delete the VMs and the legacy scripts
    (`scripts/deploy.sh`, `scripts/update_app.sh`, `code/get_env.py`).
+
+To go back to a VM during the cutover: start it, point DNS back at it and
+unset `CLOUD_SCHEDULER_ENABLED` (then re-run the deploy, which pauses the jobs).
 
 Browsers call the API by its domain, so the chat widget needs no change as
 long as the domains are kept.

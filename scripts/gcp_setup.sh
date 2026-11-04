@@ -85,7 +85,8 @@ Done. Next:
      deploy-production have the secrets GCP_PROJECT and GCP_SA_KEY.
   2. Optional repository variables: GCP_REGION (default us-central1),
      VPC_NETWORK / VPC_SUBNET (if the database is only on a private IP),
-     CLOUD_SCHEDULER_PAUSED=true (during the VM cutover, see DEPLOYMENT.md).
+     CLOUD_SCHEDULER_ENABLED=true only once the VMs are stopped (until then the
+     summary job stays paused; see DEPLOYMENT.md).
   3. Make sure the database accepts connections from Cloud Run
      (see "Database access" in DEPLOYMENT.md).
   4. Push to staging.
