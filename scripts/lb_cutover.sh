@@ -37,7 +37,7 @@ prepare() {
            --network-endpoint-type serverless --cloud-run-service "$svc"
     g compute backend-services describe "${svc}-bes" --global >/dev/null 2>&1 \
       || g compute backend-services create "${svc}-bes" --global \
-           --load-balancing-scheme EXTERNAL_MANAGED --protocol HTTPS \
+           --load-balancing-scheme EXTERNAL_MANAGED --protocol HTTP \
            --enable-logging --logging-sample-rate 1.0
     g compute backend-services describe "${svc}-bes" --global --format='value(backends[].group)' \
       | grep -q "${svc}-neg" \
