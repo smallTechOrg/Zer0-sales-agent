@@ -26,7 +26,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # ubuntu-latest (26.04) has no Python 3.12.10 build
     services:
       postgres:
         image: postgres:16
@@ -56,7 +56,7 @@ jobs:
 
   deploy:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # ubuntu-latest (26.04) has no Python 3.12.10 build
     # The deploy-staging GitHub environment holds GCP_PROJECT and GCP_SA_KEY
     # (the github-deployer service account) and serves both branches, as the
     # VM workflow did. To gate production deploys, create deploy-production
