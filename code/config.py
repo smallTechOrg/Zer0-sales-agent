@@ -133,6 +133,19 @@ def get_db_name_and_dashboard_url():
     return db_name, DASHBOARD_URL_STAGING
 
 db_name, DASHBOARD_URL = get_db_name_and_dashboard_url()
+
+
+def environment_label():
+    """
+    "Staging" or "Local" for a non-production deployment, None for production.
+    Used to mark Slack messages. APP_ENV decides on Cloud Run; the legacy VM
+    and local fallbacks are told apart by the database they resolved to.
+    """
+    if APP_ENV == "production" or db_name == "prod_chat_db":
+        return None
+    if APP_ENV == "staging" or db_name == "staging_chat_db":
+        return "Staging"
+    return "Local"
 DATABASE_URL = DATABASE_URL + db_name
 
 def _redact_password(url: str) -> str:

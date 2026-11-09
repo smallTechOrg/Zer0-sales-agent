@@ -74,3 +74,20 @@ def test_cloud_run_without_app_env_falls_back_to_local(monkeypatch):
 )
 def test_password_is_redacted_from_logs(url, expected):
     assert config._redact_password(url) == expected
+
+
+class TestConfigEnvironmentLabel:
+    def test_label_follows_app_env(self, monkeypatch):
+        for env, db, expected in [("production", "prod_chat_db", None), ("staging", "staging_chat_db", "Staging"), ("local", "chatdb", "Local")]:
+            monkeypatch.setattr(config, "APP_ENV", env)
+            monkeypatch.setattr(config, "db_name", db)
+            assert config.environment_label() == expected
+
+    def test_legacy_deploy_is_told_apart_by_database(self, monkeypatch):
+        monkeypatch.setattr(config, "APP_ENV", "")
+        monkeypatch.setattr(config, "db_name", "prod_chat_db")
+        assert config.environment_label() is None
+        monkeypatch.setattr(config, "db_name", "staging_chat_db")
+        assert config.environment_label() == "Staging"
+        monkeypatch.setattr(config, "db_name", "chatdb")
+        assert config.environment_label() == "Local"
