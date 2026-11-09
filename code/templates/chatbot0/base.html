@@ -85,5 +85,8 @@
       </div>
     </div>
   </footer>
+{% if chat_widget %}
+  <script src="{{ widget_url }}/embed.js" data-chat-url="{{ widget_url }}/embed" data-colour="#1C1B18" data-tagline="Talk to us" defer></script>
+{% endif %}
 </body>
 </html>
