@@ -5,6 +5,7 @@ from langchain_groq import ChatGroq
 from config import GROQ_API_KEY, GROQ_MODEL_NAME, agent_type
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from system_prompt import get_prompt
+from contact_validation import sanitise_contact_info
 
 def process_conversation(user_input, session_id, request_type, domain):
     """
@@ -18,7 +19,12 @@ def process_conversation(user_input, session_id, request_type, domain):
         _update_session_request_type(session_id, request_type, domain)
         # Choose llm function based on request type
         info_data = _detect_info_with_llm(user_input, request_type, domain)
-        
+        if info_data and request_type == agent_type.SALES:
+            # The LLM extracts whatever the visitor typed. Placeholders and
+            # malformed values ("test@test.com", "1234567890") must not reach
+            # the leads table, so blank them before deciding whether to save.
+            info_data = sanitise_contact_info(info_data)
+
         if info_data and _has_valid_info(info_data, request_type):
             print(f"[PROCESSOR] info detected in session {session_id}")
                 
