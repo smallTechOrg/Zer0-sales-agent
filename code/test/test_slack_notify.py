@@ -16,13 +16,14 @@ import slack_notify  # noqa: E402
 IST = ZoneInfo("Asia/Kolkata")
 RUN_AT = datetime(2026, 10, 7, 17, 0, tzinfo=IST)
 DASHBOARD = "https://zer0.smalltech.in/dashboard?h=test-secret"
-HEADER = f"<{DASHBOARD}|Zer0 Chat Summary - 7th Oct 2026 - 5 pm IST>"
+HEADER = f"<{DASHBOARD}|chatbot0 Chat Summary - 7th Oct 2026 - 5 pm IST>"
 
 
 @pytest.fixture(autouse=True)
 def fixed_config(monkeypatch):
     monkeypatch.setattr(slack_notify.config, "PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
     monkeypatch.setattr(slack_notify.config, "DASHBOARD_URL", DASHBOARD)
+    monkeypatch.setattr(slack_notify.config, "environment_label", lambda: None)
 
 
 def _session(i, **extra):
@@ -103,6 +104,7 @@ class TestBuildMessages:
     def test_exact_format(self):
         [message] = slack_notify.build_messages(_result([_session(1), _session(2)]))
         assert message == {
+            "username": "chatbot0-updates",
             "text": (
                 f"{HEADER}\n"
                 "7th Oct, 4:11 pm - SMALLTECH - Lead 1 - Summary 1.\n"
@@ -119,7 +121,7 @@ class TestBuildMessages:
     def test_header_without_run_time(self):
         result = _result([_session(1)], run_at=None)
         [message] = slack_notify.build_messages(result)
-        assert message["text"].startswith(f"<{DASHBOARD}|Zer0 Chat Summary>\n")
+        assert message["text"].startswith(f"<{DASHBOARD}|chatbot0 Chat Summary>\n")
 
     def test_missing_name_is_unknown(self):
         blank = _session(1, name="   ")
@@ -153,7 +155,7 @@ class TestBuildMessages:
     def test_silent_session_gets_no_line(self):
         silent = _session(2, silent=True, summary="Opened the chat but did not write anything.")
         [message] = slack_notify.build_messages(_result([_session(1), silent]))
-        assert message == {"text": f"{HEADER}\n7th Oct, 4:11 pm - SMALLTECH - Lead 1 - Summary 1."}
+        assert message == {"username": "chatbot0-updates", "text": f"{HEADER}\n7th Oct, 4:11 pm - SMALLTECH - Lead 1 - Summary 1."}
 
     def test_only_silent_sessions_give_no_messages(self):
         silent = _session(1, silent=True, summary="Opened the chat but did not write anything.")
@@ -180,8 +182,9 @@ class TestBuildMessages:
         run_at = datetime(2026, 10, 7, 18, 0, tzinfo=IST)
         [message] = slack_notify.build_messages(_result([session], run_at=run_at))
         assert message == {
+            "username": "chatbot0-updates",
             "text": (
-                f"<{DASHBOARD}|Zer0 Chat Summary - 7th Oct 2026 - 6 pm IST>\n"
+                f"<{DASHBOARD}|chatbot0 Chat Summary - 7th Oct 2026 - 6 pm IST>\n"
                 "Failed to generate a summary. LLM calls failed with error: RESOURCE_EXHAUSTED."
             )
         }
@@ -301,3 +304,27 @@ class TestSend:
         monkeypatch.setattr(slack_notify.requests, "post", lambda *a, **k: _Bad())
         with pytest.raises(RuntimeError, match="400"):
             slack_notify.send_summaries_to_slack(_result([_session(1)]))
+
+
+class TestEnvironmentMarker:
+    """Staging and local runs are marked in the header; production is not."""
+
+    def test_production_has_no_marker(self):
+        [message] = slack_notify.build_messages(_result([_session(1)]))
+        assert message["text"].startswith(f"<{DASHBOARD}|chatbot0 Chat Summary")
+
+    @pytest.mark.parametrize("label", ["Staging", "Local"])
+    def test_non_production_is_marked_before_the_link(self, monkeypatch, label):
+        monkeypatch.setattr(slack_notify.config, "environment_label", lambda: label)
+        [message] = slack_notify.build_messages(_result([_session(1)]))
+        assert message["text"].startswith(f"*[{label}]* <{DASHBOARD}|chatbot0 Chat Summary - 7th Oct 2026 - 5 pm IST>\n")
+
+    def test_every_part_of_a_split_run_carries_the_marker(self, monkeypatch):
+        monkeypatch.setattr(slack_notify.config, "environment_label", lambda: "Staging")
+        monkeypatch.setattr(slack_notify, "MESSAGE_LIMIT", 200)
+        sessions = [_session(i, summary=f"Summary {i}. " + "x" * 80) for i in range(1, 5)]
+        messages = slack_notify.build_messages(_result(sessions))
+        assert len(messages) > 1
+        assert all(m["text"].startswith("*[Staging]* <") for m in messages)
+        assert all(m["username"] == "chatbot0-updates" for m in messages)
+
