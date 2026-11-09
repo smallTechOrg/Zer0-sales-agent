@@ -76,3 +76,27 @@ def test_root_is_still_the_swagger_ui(client):
     html = res.get_data(as_text=True)
     assert "swagger" in html.lower()
     assert "chatbot0" not in html
+
+
+HOST = {"Host": "chatbot0.smalltech.in"}
+
+
+@pytest.mark.parametrize("path", ["/", "/pricing"])
+def test_chatbot0_host_serves_pages_at_root(client, path):
+    res = client.get(path, headers=HOST)
+    assert res.status_code == 200 and res.mimetype == "text/html"
+    assert 'chatbot<span class="pub-wordmark__zero">0</span>' in res.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("path", ["/static/css/chatbot0.css", "/static/img/icon.svg", "/robots.txt", "/sitemap.xml"])
+def test_chatbot0_host_serves_assets_at_root(client, path):
+    assert client.get(path, headers=HOST).status_code == 200
+
+
+def test_chatbot0_host_leaves_api_paths_alone(client):
+    assert client.get("/health", headers=HOST).status_code == client.get("/health").status_code
+
+
+def test_other_hosts_keep_swagger_at_root(client):
+    html = client.get("/", headers={"Host": "zero-sales-agent-a23rjysfbq-uc.a.run.app"}).get_data(as_text=True)
+    assert "chatbot<span" not in html

@@ -12,8 +12,10 @@ Swagger UI (api/swagger.py) and must keep doing so.
 
 Links and asset paths in the templates are relative ("pricing", "./",
 "static/..."), so the same HTML works at /chatbot0/ on this service and at the
-root of chatbot0.smalltech.in once a load balancer maps that host onto this
-prefix. Canonical, Open Graph and sitemap URLs always point at
+root of chatbot0.smalltech.in. On that host (Cloud Run domain mapping, see
+register_host_routing) "/", "/pricing", "/robots.txt", "/sitemap.xml" and
+"/static/..." serve these pages; every other path, and every other host, is
+untouched, so the API and the Swagger UI behave exactly as before. Canonical, Open Graph and sitemap URLs always point at
 https://chatbot0.smalltech.in.
 
 The pages take no input, read nothing from the database and call no LLM.
@@ -23,7 +25,7 @@ from __future__ import annotations
 
 import os
 
-from flask import Blueprint, Response, render_template
+from flask import Blueprint, Flask, Response, render_template, request, send_from_directory
 
 from . import content
 
@@ -92,3 +94,30 @@ def sitemap():
         f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'
     )
     return Response(body, mimetype="application/xml")
+
+
+# Hosts that serve the chatbot0 pages at their root. Override with CHATBOT0_HOSTS (comma-separated).
+DEFAULT_HOSTS = "chatbot0.smalltech.in"
+
+
+def register_host_routing(app: Flask) -> None:
+    """Serve the chatbot0 pages at the root of the chatbot0 host(s).
+
+    Only GET/HEAD on a handful of exact paths is intercepted, and only for those hosts; anything else falls
+    through to the normal routes (API, health, Swagger)."""
+    hosts = {h.strip().lower() for h in os.environ.get("CHATBOT0_HOSTS", DEFAULT_HOSTS).split(",") if h.strip()}
+    pages = {"/": landing, "/pricing": pricing, "/robots.txt": robots, "/sitemap.xml": sitemap}
+
+    @app.before_request
+    def _chatbot0_host_root():
+        if request.method not in ("GET", "HEAD"):
+            return None
+        host = (request.host or "").split(":")[0].lower()
+        if host not in hosts:
+            return None
+        path = request.path
+        if path in pages:
+            return pages[path]()
+        if path.startswith("/static/"):
+            return send_from_directory(_STATIC_DIR, path[len("/static/"):])
+        return None
