@@ -141,6 +141,25 @@ python app.py
 Now visit http://127.0.0.1:5000/ in your browser.
 For newer APIs visit http://127.0.0.1:5001/api/docs.
 
+## chatbot0 public pages
+
+The marketing pages for **chatbot0** (the chat agent this backend powers) are
+rendered server-side by the `chatbot0` blueprint (`code/chatbot0/`), under the
+`/chatbot0/` prefix, because `/` is the legacy Swagger UI:
+
+| Path | Page |
+|---|---|
+| `/chatbot0/` | Landing page |
+| `/chatbot0/pricing` | Pricing (plans live in `code/chatbot0/content.py`) |
+| `/chatbot0/robots.txt`, `/chatbot0/sitemap.xml` | SEO files for chatbot0.smalltech.in |
+| `/chatbot0/static/...` | CSS, favicons, logo (`code/static/chatbot0/`) |
+
+Templates are in `code/templates/chatbot0/`. Links in them are relative, so the
+same pages work at the root of chatbot0.smalltech.in once that host is mapped
+onto `/chatbot0/`. Canonical and Open Graph URLs always use
+https://chatbot0.smalltech.in. The pages take no input and never touch the
+database or the LLM.
+
 ## Test Flask APIs 
 
 If flask is rendered successfully, then test APIs by:

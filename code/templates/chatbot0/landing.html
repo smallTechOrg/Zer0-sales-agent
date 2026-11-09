@@ -1,0 +1,167 @@
+{% extends "chatbot0/base.html" %}
+{% block head %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "chatbot0",
+    "applicationCategory": "BusinessApplication",
+    "operatingSystem": "Web Browser",
+    "url": "{{ site_url }}/",
+    "description": "An AI chat agent for small business websites: answers visitors, captures leads and hands over the warm conversation. No code required.",
+    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD", "description": "Free plan with {{ free_conversations }} conversations a month"},
+    "author": {
+      "@type": "Organization",
+      "name": "smallTech",
+      "url": "https://smalltech.in",
+      "contactPoint": {"@type": "ContactPoint", "email": "{{ contact_email }}", "contactType": "customer support"}
+    }
+  }
+  </script>
+{% endblock %}
+{% block content %}
+<section class="pub-hero">
+  <div class="pub-wrap pub-hero__grid">
+    <div class="pub-hero__copy">
+      <p class="pub-label">chatbot0 by Zer0</p>
+      <h1 class="pub-title">The AI chat agent for your website, built for the <span class="pub-accent">agentic age.</span></h1>
+      <p class="pub-lead">Contact forms lose customers. chatbot0 sits on your site, answers visitors' questions, captures their details and hands you the warm conversation. You make the calls.</p>
+      <div class="pub-actions">
+        <a class="pub-btn pub-btn--primary" href="{{ signup_url }}">Sign up for free</a>
+        <a class="pub-btn pub-btn--secondary" href="pricing">See pricing</a>
+      </div>
+      <ul class="pub-pills" aria-label="Highlights">
+        <li>Free plan: {{ free_conversations }} conversations a month</li>
+        <li>Live in under 5 minutes</li>
+        <li>No code</li>
+      </ul>
+    </div>
+
+    <div class="pub-mock" aria-hidden="true">
+      <div class="pub-mock__bar">
+        <span class="pub-mock__dots"><i></i><i></i><i></i></span>
+        <span class="pub-mock__url">yourbusiness.com</span>
+      </div>
+      <div class="pub-mock__body">
+        <p class="pub-bubble pub-bubble--visitor">In how many days can I expect the shipment for my order?</p>
+        <p class="pub-bubble pub-bubble--agent">You should receive your order within 5–7 business days. Can I take your email so we can send you the tracking link?</p>
+        <p class="pub-bubble pub-bubble--visitor">Sure, it's priya@example.com. And what is your return policy?</p>
+        <p class="pub-mock__lead"><span class="pub-dot"></span>New lead captured · sent to your dashboard</p>
+      </div>
+      <div class="pub-mock__input">Type a message…</div>
+    </div>
+  </div>
+</section>
+
+<section class="pub-section" id="how">
+  <div class="pub-wrap">
+    <div class="pub-section__head">
+      <p class="pub-label">How it works</p>
+      <h2 class="pub-heading">From a static page to a conversation that sells, in minutes.</h2>
+      <p class="pub-body">chatbot0 works the front of your funnel around the clock, so the conversations that reach you are the ones worth having.</p>
+    </div>
+    <div class="pub-cards pub-cards--3">
+      <article class="pub-card">
+        <p class="pub-card__num">01</p>
+        <h3 class="pub-subheading">Answers visitors</h3>
+        <p class="pub-body">Responds instantly to questions about your products, services and FAQs, in plain, human language.</p>
+      </article>
+      <article class="pub-card">
+        <p class="pub-card__num">02</p>
+        <h3 class="pub-subheading">Captures leads</h3>
+        <p class="pub-body">Asks the right questions and captures contact details straight into your lead dashboard, while you sleep.</p>
+      </article>
+      <article class="pub-card">
+        <p class="pub-card__num">03</p>
+        <h3 class="pub-subheading">Hands over the warm conversation</h3>
+        <p class="pub-body">When a visitor is ready to buy, you pick it up with the whole conversation in hand.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="pub-section pub-section--tight">
+  <div class="pub-wrap">
+    <div class="pub-panel">
+      <div class="pub-panel__grid">
+        <div>
+          <p class="pub-label pub-label--gold">Getting started</p>
+          <h2 class="pub-heading pub-heading--on-ink">Live on your site in three steps.</h2>
+          <ol class="pub-steps">
+            <li><span>1</span><div><strong>Sign up free.</strong> Tell chatbot0 about your business.</div></li>
+            <li><span>2</span><div><strong>Paste one line of code.</strong> It goes live on any website.</div></li>
+            <li><span>3</span><div><strong>Watch the leads arrive.</strong> Every one lands in the built-in dashboard.</div></li>
+          </ol>
+          <a class="pub-btn pub-btn--primary" href="{{ signup_url }}">Get started free</a>
+        </div>
+        <div class="pub-feed" aria-label="Example lead dashboard">
+          <p class="pub-feed__title">Example: your lead dashboard</p>
+          <ul>
+            <li><span class="pub-feed__name">Alex Rivera</span><span class="pub-feed__mail">alex@rivera.example</span><span class="pub-feed__tag">New</span></li>
+            <li><span class="pub-feed__name">Sarah Chen</span><span class="pub-feed__mail">s.chen@dev.example</span><span class="pub-feed__tag">New</span></li>
+            <li><span class="pub-feed__name">Marcus Wright</span><span class="pub-feed__mail">m.wright@xyz.example</span><span class="pub-feed__tag">New</span></li>
+            <li><span class="pub-feed__name">Elena Rossi</span><span class="pub-feed__mail">elena@rossi.example</span><span class="pub-feed__tag">New</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pub-section">
+  <div class="pub-wrap pub-split">
+    <div>
+      <p class="pub-label">Why small businesses use it</p>
+      <h2 class="pub-heading">An AI front desk, at a small-business price.</h2>
+      <p class="pub-body">chatbot0 is an embeddable AI chat agent built for small businesses. Enterprise chatbots take months of setup. chatbot0 goes live on your website in minutes, with no code.</p>
+      <p class="pub-body">It learns your products, services and FAQs, answers customer questions and captures leads 24 hours a day, 7 days a week, even when your team is offline.</p>
+      <p class="pub-body">From e-commerce to real estate, healthcare and education, it gives your visitors a premium experience without an enterprise budget. Start free with {{ free_conversations }} conversations a month, or upgrade to Pro for unlimited conversations and backend integrations.</p>
+    </div>
+    <div class="pub-stats">
+      <div class="pub-stat"><p class="pub-stat__value">&lt; 5 min</p><p class="pub-label">Setup time</p><p class="pub-caption">Paste one line of code and you're live on any website.</p></div>
+      <div class="pub-stat"><p class="pub-stat__value">Any</p><p class="pub-label">Industry</p><p class="pub-caption">From retail to healthcare, it learns your business.</p></div>
+      <div class="pub-stat"><p class="pub-stat__value">{{ free_conversations }}</p><p class="pub-label">Free conversations</p><p class="pub-caption">Every month, on the free plan. No credit card required.</p></div>
+      <div class="pub-stat"><p class="pub-stat__value">24/7</p><p class="pub-label">Always on</p><p class="pub-caption">Nights, weekends and holidays.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="pub-section" id="pricing">
+  <div class="pub-wrap">
+    <div class="pub-section__head">
+      <p class="pub-label">Plans</p>
+      <h2 class="pub-heading">Flexible plans for every scale.</h2>
+      <p class="pub-body">Start free and upgrade when the conversations grow. <a class="pub-link" href="pricing">See full pricing</a>.</p>
+    </div>
+    {% include "chatbot0/_plans.html" %}
+  </div>
+</section>
+
+<section class="pub-section" id="zer0">
+  <div class="pub-wrap">
+    <div class="pub-suite">
+      <div>
+        <p class="pub-label">Part of the Zer0 suite</p>
+        <h2 class="pub-heading">Operationalising agentic AI for small businesses.</h2>
+        <p class="pub-body">chatbot0 is one of the Zer0 agents from smallTech. Agents do the repetitive steps, people make the calls, and every business gets the AI tools enterprises use, simply and affordably.</p>
+      </div>
+      <div class="pub-actions pub-actions--flush">
+        <a class="pub-btn pub-btn--secondary" href="{{ zer0_url }}">Explore Zer0</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pub-section pub-section--tight">
+  <div class="pub-wrap">
+    <div class="pub-panel pub-cta">
+      <h2 class="pub-heading pub-heading--on-ink">Put chatbot0 on your website today.</h2>
+      <p class="pub-body pub-body--on-ink">Free to start. Live on your site in minutes.</p>
+      <div class="pub-actions pub-actions--center">
+        <a class="pub-btn pub-btn--primary" href="{{ signup_url }}">Sign up for free</a>
+        <a class="pub-btn pub-btn--secondary-on-ink" href="mailto:{{ contact_email }}?subject=chatbot0">Email {{ contact_email }}</a>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
