@@ -1,6 +1,8 @@
-# AI Agent Boilerplate
+# chatbot0
 
-This project is a simple AI agent powered by Groq cloud (via LangChain), delivered through a Flask backend. 
+chatbot0 is the AI chat agent for small-business websites, part of [Zer0](https://zer0.smalltech.in) by smallTech. This repository (formerly `Zer0-sales-agent`) is its backend: the chat API behind the embeddable widget, the lead and prompt storage, and the public pages at [chatbot0.smalltech.in](https://chatbot0.smalltech.in). It is a Flask app that calls the LLM through LangChain.
+
+Prompts are stored per domain in the `prompts` table (`base-prompt`, `company`, `intro-message`); a visitor's site is matched to a domain key through the `domains` table. The Cloud Run service, image repository and runtime service account keep their original `zero-sales-agent` names (see `DEPLOYMENT.md`).
 
 ## Tech Stack
 

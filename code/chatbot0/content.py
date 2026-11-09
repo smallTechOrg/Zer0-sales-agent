@@ -11,7 +11,8 @@ from dataclasses import dataclass
 SITE_URL = "https://chatbot0.smalltech.in"
 # Sign-up still lives in the existing app, now on zer0.smalltech.in.
 SIGNUP_URL = "https://zer0.smalltech.in/signup"
-# The chat widget (embed.js + the /embed iframe) is served by the Zer0 app; chatbot0 uses Zer0's prompts for now.
+# The chat widget (embed.js + the /embed iframe) is served by the Zer0 app. The backend picks the
+# prompts by the page origin: chatbot0.smalltech.in maps to the CHATBOT0 domain key in the prompts table.
 WIDGET_URL = "https://zer0.smalltech.in"
 ZER0_URL = "https://zer0.smalltech.in"
 CONTACT_EMAIL = "contact@smalltech.in"
