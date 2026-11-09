@@ -1,0 +1,89 @@
+{#- chatbot0 public pages (SMA-8). Links and assets are relative on purpose: see chatbot0/__init__.py. -#}
+{%- macro wordmark() -%}
+<span class="pub-wordmark">chatbot<span class="pub-wordmark__zero">0</span></span>
+{%- endmacro -%}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }}</title>
+  <meta name="description" content="{{ page_description }}">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="{{ canonical }}">
+  <meta name="theme-color" content="#F5F1EE">
+  <link rel="icon" href="static/img/favicon.ico" sizes="any">
+  <link rel="icon" href="static/img/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="static/img/apple-icon.png">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="chatbot0">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:title" content="{{ page_title }}">
+  <meta property="og:description" content="{{ page_description }}">
+  <meta property="og:url" content="{{ canonical }}">
+  <meta property="og:image" content="{{ site_url }}/static/img/og-chatbot0.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="chatbot0, the AI chat agent for small business websites, by smallTech">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page_title }}">
+  <meta name="twitter:description" content="{{ page_description }}">
+  <meta name="twitter:image" content="{{ site_url }}/static/img/og-chatbot0.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="static/css/chatbot0.css">
+  {% block head %}{% endblock %}
+</head>
+<body class="pub">
+  <a class="pub-skip" href="#main">Skip to content</a>
+  <header class="pub-header">
+    <div class="pub-wrap pub-header__inner">
+      <a class="pub-brand" href="./" aria-label="chatbot0 home">{{ wordmark() }}</a>
+      <nav class="pub-nav" aria-label="Main">
+        <a href="./#how" class="pub-nav__link">How it works</a>
+        <a href="pricing" class="pub-nav__link"{% if page_path == "/pricing" %} aria-current="page"{% endif %}>Pricing</a>
+        <a href="./#zer0" class="pub-nav__link">Zer0</a>
+      </nav>
+      <a class="pub-btn pub-btn--primary pub-header__cta" href="{{ signup_url }}">Sign up free</a>
+      <details class="pub-menu">
+        <summary class="pub-menu__toggle" aria-label="Menu">Menu</summary>
+        <div class="pub-menu__panel">
+          <a href="./#how">How it works</a>
+          <a href="pricing">Pricing</a>
+          <a href="./#zer0">Zer0</a>
+          <a href="mailto:{{ contact_email }}">Contact</a>
+          <a class="pub-btn pub-btn--primary" href="{{ signup_url }}">Sign up free</a>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <main id="main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="pub-footer">
+    <div class="pub-wrap pub-footer__inner">
+      <div class="pub-footer__brand">
+        {{ wordmark() }}
+        <span class="pub-footer__by">by</span>
+        <a href="https://smalltech.in" class="pub-footer__logo" aria-label="smallTech">
+          <img src="static/img/logo-smalltech.svg" alt="smallTech" width="416" height="92">
+        </a>
+      </div>
+      <div class="pub-footer__meta">
+        <nav class="pub-footer__nav" aria-label="Footer">
+          <a href="{{ zer0_url }}">Zer0</a>
+          <a href="mailto:{{ contact_email }}?subject=chatbot0">contact</a>
+          <a href="{{ github_url }}" target="_blank" rel="noreferrer">github</a>
+          <a href="{{ linkedin_url }}" target="_blank" rel="noreferrer">linkedin</a>
+        </nav>
+        <span class="pub-footer__legal">&copy; 2026 madhyamakist pvt ltd</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

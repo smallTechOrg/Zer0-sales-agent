@@ -1,0 +1,34 @@
+{% extends "chatbot0/base.html" %}
+{% block content %}
+<section class="pub-hero pub-hero--short">
+  <div class="pub-wrap"><div class="pub-section__head">
+    <p class="pub-label">Pricing</p>
+    <h1 class="pub-title">Flexible plans for <span class="pub-accent">every scale.</span></h1>
+    <p class="pub-lead">Start free and upgrade as the conversations grow. Save up to {{ max_yearly_saving_pct }}% when you pay yearly. No hidden fees.</p>
+  </div></div>
+</section>
+
+<section class="pub-section pub-section--flush">
+  <div class="pub-wrap">
+    {% include "chatbot0/_plans.html" %}
+  </div>
+</section>
+
+<section class="pub-section">
+  <div class="pub-wrap pub-split">
+    <div>
+      <p class="pub-label">Every plan includes</p>
+      <h2 class="pub-heading">One agent, ready for your site.</h2>
+      <p class="pub-body">An embeddable chat agent that answers visitors and captures leads, a built-in dashboard where every lead lands, and setup in minutes with one line of code.</p>
+    </div>
+    <div class="pub-card">
+      <h3 class="pub-subheading">Questions about plans</h3>
+      <p class="pub-body">Need a custom setup, a backend integration or help choosing a plan? Write to us and a person will reply.</p>
+      <div class="pub-actions pub-actions--flush">
+        <a class="pub-btn pub-btn--primary" href="{{ signup_url }}">Sign up for free</a>
+        <a class="pub-btn pub-btn--secondary" href="mailto:{{ contact_email }}?subject=chatbot0%20pricing">Email us</a>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
