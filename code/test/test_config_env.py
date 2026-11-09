@@ -24,7 +24,7 @@ def no_metadata(monkeypatch):
 @pytest.mark.parametrize(
     "app_env, expected_db, expected_url",
     [
-        ("production", "prod_chat_db", "https://zero.smalltech.in/dashboard?h=khuljasimsim"),
+        ("production", "prod_chat_db", "https://zer0.smalltech.in/dashboard?h=khuljasimsim"),
         ("staging", "staging_chat_db", config.DASHBOARD_URL_STAGING),
         ("local", "chatdb", config.DASHBOARD_URL_STAGING),
     ],

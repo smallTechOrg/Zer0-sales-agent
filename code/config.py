@@ -54,7 +54,7 @@ SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
 # The Slack message header links to one of these: production on the main
 # branch, staging otherwise. Chosen in get_db_name_and_dashboard_url() below.
-DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zero.smalltech.in/dashboard?h=khuljasimsim")
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zer0.smalltech.in/dashboard?h=khuljasimsim")
 DASHBOARD_URL_STAGING = os.getenv("DASHBOARD_URL_STAGING", "https://zero-staging.smalltech.in/dashboard?h=khuljasimsim")
 # How many days back the summary job looks for sessions without a summary.
 # Only a cap on retries: a session is summarised once and then left alone, so
