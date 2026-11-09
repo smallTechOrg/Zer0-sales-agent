@@ -67,6 +67,9 @@ def _render(template: str, *, path: str, title: str, description: str) -> str:
         plans=content.PLANS,
         free_conversations=content.FREE_CONVERSATIONS,
         max_yearly_saving_pct=content.MAX_YEARLY_SAVING_PCT,
+        # The chat widget needs a `domains` row for the page's origin, so it is only rendered on the chatbot0 host.
+        chat_widget=(request.host or "").split(":")[0].lower() in _chat_hosts(),
+        widget_url=content.WIDGET_URL,
     )
 
 
@@ -100,12 +103,16 @@ def sitemap():
 DEFAULT_HOSTS = "chatbot0.smalltech.in"
 
 
+def _chat_hosts() -> set[str]:
+    return {h.strip().lower() for h in os.environ.get("CHATBOT0_HOSTS", DEFAULT_HOSTS).split(",") if h.strip()}
+
+
 def register_host_routing(app: Flask) -> None:
     """Serve the chatbot0 pages at the root of the chatbot0 host(s).
 
     Only GET/HEAD on a handful of exact paths is intercepted, and only for those hosts; anything else falls
     through to the normal routes (API, health, Swagger)."""
-    hosts = {h.strip().lower() for h in os.environ.get("CHATBOT0_HOSTS", DEFAULT_HOSTS).split(",") if h.strip()}
+    hosts = _chat_hosts()
     pages = {"/": landing, "/pricing": pricing, "/robots.txt": robots, "/sitemap.xml": sitemap}
 
     @app.before_request

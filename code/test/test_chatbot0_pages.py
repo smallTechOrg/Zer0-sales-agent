@@ -100,3 +100,12 @@ def test_chatbot0_host_leaves_api_paths_alone(client):
 def test_other_hosts_keep_swagger_at_root(client):
     html = client.get("/", headers={"Host": "zero-sales-agent-a23rjysfbq-uc.a.run.app"}).get_data(as_text=True)
     assert "chatbot<span" not in html
+
+
+def test_chat_widget_is_on_the_chatbot0_host_only(client):
+    on_host = client.get("/", headers=HOST).get_data(as_text=True)
+    assert f'src="{content.WIDGET_URL}/embed.js"' in on_host
+    assert f'data-chat-url="{content.WIDGET_URL}/embed"' in on_host
+    assert "embed.js" in client.get("/pricing", headers=HOST).get_data(as_text=True)
+    # other hosts (the Cloud Run URL, localhost) have no domains row, so no widget
+    assert "embed.js" not in client.get("/chatbot0/").get_data(as_text=True)
