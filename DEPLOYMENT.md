@@ -160,7 +160,7 @@ The workflow no longer touches the VMs.
 `api-staging.smalltech.in` (also under `/zero/`), which already point at the
 shared HTTPS load balancer `staging-lb` (url map `https-staging`). The cutover
 swaps the backend behind those routes from the VM to Cloud Run, which is
-instant and reversible. `zero.smalltech.in` / `zero-staging.smalltech.in`
+instant and reversible. `zer0.smalltech.in` (was zero.smalltech.in) / `zero-staging.smalltech.in`
 are the dashboards (GitHub Pages / Vercel) and stay as they are. The load
 balancer and the VMs also serve other apps (webscraper, hashtaglocal,
 ir-agent): **do not change DNS or stop the VMs**; only the Zer0 app on them

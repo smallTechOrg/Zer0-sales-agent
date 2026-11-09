@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 SITE_URL = "https://chatbot0.smalltech.in"
-# Sign-up still lives in the existing app on zero.smalltech.in for now.
-SIGNUP_URL = "https://zero.smalltech.in/signup"
+# Sign-up still lives in the existing app, now on zer0.smalltech.in.
+SIGNUP_URL = "https://zer0.smalltech.in/signup"
 ZER0_URL = "https://zer0.smalltech.in"
 CONTACT_EMAIL = "contact@smalltech.in"
 GITHUB_URL = "https://github.com/smallTechOrg"

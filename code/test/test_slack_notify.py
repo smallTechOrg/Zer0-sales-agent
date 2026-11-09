@@ -15,7 +15,7 @@ import slack_notify  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 RUN_AT = datetime(2026, 10, 7, 17, 0, tzinfo=IST)
-DASHBOARD = "https://zero.smalltech.in/dashboard?h=test-secret"
+DASHBOARD = "https://zer0.smalltech.in/dashboard?h=test-secret"
 HEADER = f"<{DASHBOARD}|Zer0 Chat Summary - 7th Oct 2026 - 5 pm IST>"
 
 
