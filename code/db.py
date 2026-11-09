@@ -152,13 +152,6 @@ def ensure_prompts_table_exists(sync_connection):
     print("Table 'prompts' created/verified successfully.")
 
 
-# (domain key, origin host) pairs seeded under the COMMON root on every start.
-DEFAULT_DOMAINS = (
-    ("ZERO", "zero.smalltech.in"),   # the original Zer0 app address
-    ("ZERO", "zer0.smalltech.in"),   # its new address (SMA-8)
-)
-
-
 def ensure_domains_table_exists(sync_connection):
     """Make the domains table. Columns: key, address, parent."""
     with sync_connection.cursor() as cur:
@@ -177,21 +170,6 @@ def ensure_domains_table_exists(sync_connection):
         ON CONFLICT (address) DO NOTHING;
         """
         cur.execute(create_table_sql)
-
-        # Default Zer0 domains. Each address maps to an existing domain key, so
-        # the key's prompts and leads carry over. The Zer0 app moved from
-        # zero.smalltech.in to zer0.smalltech.in; without a row for the new
-        # origin the chat answers "Incorrect Address". DO NOTHING keeps this
-        # safe to run on every start, on a fresh or a populated database.
-        for key, address in DEFAULT_DOMAINS:
-            cur.execute(
-                """
-                INSERT INTO domains (key, address, parent)
-                VALUES (%s, %s, (SELECT id FROM domains WHERE address = 'example.com'))
-                ON CONFLICT (address) DO NOTHING;
-                """,
-                (key, address),
-            )
 
     print("Table 'domains' created/verified successfully.")
 
