@@ -179,6 +179,18 @@ class TestDomainPaths:
 
         assert _find_domain_key("example.com") is not None
 
+    def test_default_zer0_domains_are_seeded_under_the_zero_key(self):
+        """The new zer0.smalltech.in origin must resolve (else the widget says "Incorrect Address")."""
+        import db
+        from api.validators import _find_domain_key
+
+        with db_pool.get_connection() as conn:
+            db.ensure_domains_table_exists(conn)   # idempotent: safe on a populated database
+            db.ensure_domains_table_exists(conn)
+        for _key, address in db.DEFAULT_DOMAINS:
+            row = _find_domain_key(address)
+            assert row is not None and row[0] == "ZERO", address
+
     def test_repository_crud(self):
         from domains.repository import DomainRepository
 
