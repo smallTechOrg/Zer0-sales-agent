@@ -110,7 +110,7 @@ def get_db_name_and_dashboard_url():
         print(f"APP_ENV={APP_ENV}")
         return _ENVIRONMENTS[APP_ENV]
     if APP_ENV == "local":
-        return db_name, DASHBOARD_URL_STAGING
+        return db_name, DASHBOARD_URL_LOCAL
     if APP_ENV:
         raise ValueError(
             f"APP_ENV={APP_ENV!r} is not one of production, staging, local"

@@ -26,7 +26,7 @@ def no_metadata(monkeypatch):
     [
         ("production", "prod_chat_db", "https://zero.smalltech.in/dashboard?h=khuljasimsim"),
         ("staging", "staging_chat_db", config.DASHBOARD_URL_STAGING),
-        ("local", "chatdb", config.DASHBOARD_URL_STAGING),
+        ("local", "chatdb", config.DASHBOARD_URL_LOCAL),
     ],
 )
 def test_app_env_picks_environment(monkeypatch, no_metadata, app_env, expected_db, expected_url):
