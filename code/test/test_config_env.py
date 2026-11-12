@@ -61,7 +61,7 @@ def test_cloud_run_without_app_env_falls_back_to_local(monkeypatch):
     monkeypatch.setattr(config, "APP_ENV", "")
     monkeypatch.setattr(config, "db_name", "chatdb")
     monkeypatch.setattr(config.requests, "get", lambda *a, **k: _Resp(404))
-    assert config.get_db_name_and_dashboard_url() == ("chatdb", config.DASHBOARD_URL_STAGING)
+    assert config.get_db_name_and_dashboard_url() == ("chatdb", config.DASHBOARD_URL_LOCAL)
 
 
 @pytest.mark.parametrize(
