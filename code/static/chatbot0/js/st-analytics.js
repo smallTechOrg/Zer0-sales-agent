@@ -1,4 +1,4 @@
-/* smallTech analytics, v1.
+/* smallTech analytics, v1.1.
    One Google Analytics 4 property (smallTech, G-YTYS0G2P7L) for every smallTech site.
    This file is copied unchanged into each site's static folder; change it everywhere or nowhere.
 
@@ -33,8 +33,15 @@
   // Always defined, so callers never need to check whether analytics is on.
   window.stTrack = function () {};
 
+  // Sites whose app lives under a path the rule above treats as private list their public pages instead.
+  var PUBLIC_ONLY = {
+    workshop0: /^\/($|app\/opportunities(\/|$)|opportunities\/)/
+  };
+
   var site = SITES[location.hostname];
-  if (!site || PRIVATE_PATH.test(location.pathname) || window.__stAnalytics) return;
+  if (!site || window.__stAnalytics) return;
+  var path = location.pathname;
+  if (PUBLIC_ONLY[site] ? !PUBLIC_ONLY[site].test(path) : PRIVATE_PATH.test(path)) return;
   window.__stAnalytics = true;
 
   window.dataLayer = window.dataLayer || [];
