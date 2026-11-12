@@ -10,7 +10,7 @@
       <li class="{{ 'is-in' if included else 'is-out' }}"><span class="pub-plan__mark" aria-hidden="true">{{ '✓' if included else '–' }}</span><span>{% if not included %}<span class="pub-sr">Not included: </span>{% endif %}{{ feature }}</span></li>
       {% endfor %}
     </ul>
-    <a class="pub-btn {{ 'pub-btn--primary' if plan.featured or plan.key == 'free' else 'pub-btn--secondary' }} pub-plan__cta" href="{{ signup_url }}">{{ plan.cta }}</a>
+    <a class="pub-btn {{ 'pub-btn--primary' if plan.featured or plan.key == 'free' else 'pub-btn--secondary' }} pub-plan__cta" href="{{ signup_url }}" data-ga-event="plan_click" data-ga-plan="{{ plan.key }}">{{ plan.cta }}</a>
   </article>
   {% endfor %}
 </div>

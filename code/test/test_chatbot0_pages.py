@@ -109,3 +109,15 @@ def test_chat_widget_is_on_the_chatbot0_host_only(client):
     assert "embed.js" in client.get("/pricing", headers=HOST).get_data(as_text=True)
     # other hosts (the Cloud Run URL, localhost) have no domains row, so no widget
     assert "embed.js" not in client.get("/chatbot0/").get_data(as_text=True)
+
+
+def test_pages_load_the_shared_analytics_script(client):
+    """One GA4 property for every smallTech site; the script decides by hostname whether to run."""
+    for path in ("/", "/pricing"):
+        assert 'src="static/js/st-analytics.js"' in client.get(path, headers=HOST).get_data(as_text=True)
+    script = client.get("/static/js/st-analytics.js", headers=HOST)
+    assert script.status_code == 200
+    body = script.get_data(as_text=True)
+    assert "G-YTYS0G2P7L" in body and '"chatbot0.smalltech.in": "chatbot0"' in body
+    # Plan buttons say which plan was picked.
+    assert 'data-ga-event="plan_click" data-ga-plan="free"' in client.get("/pricing", headers=HOST).get_data(as_text=True)
