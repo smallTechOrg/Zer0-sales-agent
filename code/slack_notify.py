@@ -17,7 +17,7 @@ MESSAGE_LIMIT = 30_000
 # Longest single conversation line.
 LINE_LIMIT = 3_000
 
-TITLE = "Zer0 Chat Summary"
+TITLE = "chatbot0 Summary"
 # Separates distinct LLM errors in the failure sentence when a run saw more
 # than one kind.
 ERROR_SEPARATOR = "; "

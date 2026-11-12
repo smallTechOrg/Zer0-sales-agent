@@ -16,7 +16,7 @@ import slack_notify  # noqa: E402
 IST = ZoneInfo("Asia/Kolkata")
 RUN_AT = datetime(2026, 10, 7, 17, 0, tzinfo=IST)
 DASHBOARD = "https://zero.smalltech.in/dashboard?h=test-secret"
-HEADER = f"<{DASHBOARD}|Zer0 Chat Summary - 7th Oct 2026 - 5 pm IST>"
+HEADER = f"<{DASHBOARD}|chatbot0 Summary - 7th Oct 2026 - 5 pm IST>"
 
 
 @pytest.fixture(autouse=True)
@@ -119,7 +119,7 @@ class TestBuildMessages:
     def test_header_without_run_time(self):
         result = _result([_session(1)], run_at=None)
         [message] = slack_notify.build_messages(result)
-        assert message["text"].startswith(f"<{DASHBOARD}|Zer0 Chat Summary>\n")
+        assert message["text"].startswith(f"<{DASHBOARD}|chatbot0 Summary>\n")
 
     def test_missing_name_is_unknown(self):
         blank = _session(1, name="   ")
@@ -181,7 +181,7 @@ class TestBuildMessages:
         [message] = slack_notify.build_messages(_result([session], run_at=run_at))
         assert message == {
             "text": (
-                f"<{DASHBOARD}|Zer0 Chat Summary - 7th Oct 2026 - 6 pm IST>\n"
+                f"<{DASHBOARD}|chatbot0 Summary - 7th Oct 2026 - 6 pm IST>\n"
                 "Failed to generate a summary. LLM calls failed with error: RESOURCE_EXHAUSTED."
             )
         }
