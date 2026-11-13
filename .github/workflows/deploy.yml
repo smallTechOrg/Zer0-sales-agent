@@ -63,9 +63,10 @@ jobs:
     env:
       APP_ENV: ${{ vars.APP_ENV }}
       SERVICE: ${{ github.ref_name == 'main' && 'zero-sales-agent' || 'zero-sales-agent-staging' }}
-      # Production keeps one warm instance so the chat widget never waits for
-      # a cold start. Staging scales to zero.
-      MIN_INSTANCES: ${{ github.ref_name == 'main' && '1' || '0' }}
+      # Instances kept warm, from the environment's CLOUD_RUN_MIN_INSTANCES.
+      # 0 scales to zero: the first request after a quiet spell waits for a
+      # cold start.
+      MIN_INSTANCES: ${{ vars.CLOUD_RUN_MIN_INSTANCES }}
       # Each instance opens up to DB_POOL_MAX_SIZE (2) connections on the
       # shared database: this caps the total at 2 x MAX_INSTANCES.
       MAX_INSTANCES: ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
@@ -94,7 +95,8 @@ jobs:
             "GCP_SA_KEY=${{ vars.GCP_SA_KEY != '' }}" \
             "APP_ENV=${{ vars.APP_ENV != '' }}" \
             "DB_NAME=${{ vars.DB_NAME != '' }}" \
-            "DASHBOARD_URL=${{ vars.DASHBOARD_URL != '' }}"; do
+            "DASHBOARD_URL=${{ vars.DASHBOARD_URL != '' }}" \
+            "CLOUD_RUN_MIN_INSTANCES=${{ vars.CLOUD_RUN_MIN_INSTANCES != '' }}"; do
             [ "${setting#*=}" = "true" ] || missing="$missing ${setting%%=*}"
           done
           if [ -n "$missing" ]; then

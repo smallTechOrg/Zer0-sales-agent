@@ -63,8 +63,9 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
   environment* step of the workflow. Every setting and its default is
   declared in `code/config.py`; `code/.env.example` lists them.
 - **Sizing**: 1 vCPU, 1 GiB, 8 concurrent requests per instance (= gunicorn's
-  8 threads; `CLOUD_RUN_CONCURRENCY` to change it), 900s request timeout. Production keeps 1 warm instance (`min-instances=1`) so the
-  chat widget never hits a cold start; staging scales to zero.
+  8 threads; `CLOUD_RUN_CONCURRENCY` to change it), 900s request timeout. Instances kept warm come from the
+  environment's `CLOUD_RUN_MIN_INSTANCES`; both are `0`, so the first request
+  after a quiet spell waits for a cold start.
   `max-instances` is 3 (`CLOUD_RUN_MAX_INSTANCES` to change it): every
   instance opens up to `DB_POOL_MAX_SIZE` (2) connections, so the shared
   database sees at most 6 from each service.
@@ -79,6 +80,7 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
 | Variable in the `staging` and `production` environments | `DB_NAME` | `staging_chat_db` / `prod_chat_db` |
 | Variable in the `staging` and `production` environments | `DASHBOARD_URL` | the dashboard the Slack summary links to |
 | Repository variable (optional) | `GCP_REGION` | default `us-central1` |
+| Variable in the `staging` and `production` environments | `CLOUD_RUN_MIN_INSTANCES` | `0` on both: scale to zero when idle |
 | Repository variable (optional) | `CLOUD_RUN_MAX_INSTANCES` | default `3` |
 | Repository variable (optional) | `VPC_NETWORK`, `VPC_SUBNET` | default `default`; `none` turns VPC egress off |
 | Repository variable (optional) | `PERIODIC_SUMMARY_CRON` | default `0 * * * *` (Asia/Kolkata) |
