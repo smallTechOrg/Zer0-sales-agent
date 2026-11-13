@@ -8,8 +8,9 @@
 #   DEPLOY_SA=github-deployer@ai-agent-boilerplate0.iam.gserviceaccount.com \
 #   ./scripts/gcp_setup.sh
 #
-# DEPLOY_SA is the service account whose key is in the GCP_SA_KEY GitHub
-# secret. It gets the roles the workflow needs; nothing else is changed on it.
+# DEPLOY_SA is the service account whose key is in the GCP_SA_KEY variable of
+# the staging and production GitHub environments. It gets the roles the
+# workflow needs; nothing else is changed on it.
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"

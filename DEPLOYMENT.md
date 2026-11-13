@@ -234,7 +234,8 @@ gcloud run services logs read zero-sales-agent-staging --region us-central1 --li
 ```bash
 docker build -t zero .
 docker run --rm -p 8080:8080 \
-  -e SCHEDULER_ENABLED=false \
+  -e APP_ENV=local -e DB_NAME=chatdb -e SCHEDULER_ENABLED=false \
+  -e DASHBOARD_URL=http://localhost:3001/dashboard \
   -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/ \
   -e GROQ_API_KEY=... zero
 curl localhost:8080/health

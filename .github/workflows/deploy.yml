@@ -83,8 +83,10 @@ jobs:
       VPC_SUBNET: ${{ vars.VPC_SUBNET || vars.VPC_NETWORK || 'default' }}
     steps:
       - name: Check the environment's variables
-        # Before anything is built. Only whether each is set is written to the
-        # log, not its value.
+        # Before anything is built. This step logs only whether each one is
+        # set, not its value.
+        env:
+          ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
         run: |
           missing=""
           for setting in \
@@ -96,7 +98,13 @@ jobs:
             [ "${setting#*=}" = "true" ] || missing="$missing ${setting%%=*}"
           done
           if [ -n "$missing" ]; then
-            echo "::error::Set these variables on the ${{ github.ref_name == 'main' && 'production' || 'staging' }} GitHub environment:$missing"
+            echo "::error::Set these variables on the $ENVIRONMENT GitHub environment:$missing"
+            exit 1
+          fi
+          # APP_ENV is the environment's own name, in lower case: the app
+          # accepts nothing else, and neither do Cloud Run labels.
+          if [ "$APP_ENV" != "$ENVIRONMENT" ]; then
+            echo "::error::APP_ENV on the $ENVIRONMENT GitHub environment must be '$ENVIRONMENT'."
             exit 1
           fi
 
