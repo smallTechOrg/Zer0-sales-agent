@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT }}
   REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   AR_REPOSITORY: zero-sales-agent
   IMAGE_NAME: zero-sales-agent
@@ -41,7 +41,6 @@ jobs:
       run:
         working-directory: code
     env:
-      APP_ENV: local
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/
       GROQ_API_KEY: dummy-key-for-tests
     steps:
@@ -57,13 +56,12 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-24.04   # ubuntu-latest (26.04) has no Python 3.12.10 build
-    # The deploy-staging GitHub environment holds GCP_PROJECT and GCP_SA_KEY
-    # (the github-deployer service account) and serves both branches, as the
-    # VM workflow did. To gate production deploys, create deploy-production
-    # with the same secrets and required reviewers, and select it for main.
-    environment: deploy-staging
+    # main deploys with the production GitHub environment, staging with
+    # staging. Each holds the variables GCP_PROJECT, GCP_SA_KEY (the
+    # github-deployer service account), APP_ENV, DB_NAME and DASHBOARD_URL.
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     env:
-      APP_ENV: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      APP_ENV: ${{ vars.APP_ENV }}
       SERVICE: ${{ github.ref_name == 'main' && 'zero-sales-agent' || 'zero-sales-agent-staging' }}
       # Production keeps one warm instance so the chat widget never waits for
       # a cold start. Staging scales to zero.
@@ -75,9 +73,7 @@ jobs:
       # the Dockerfile: more would only queue inside gunicorn (and fight over
       # the 2 pooled DB connections) instead of making Cloud Run scale out.
       CONCURRENCY: ${{ vars.CLOUD_RUN_CONCURRENCY || '8' }}
-      # The summary job stays paused unless this is "true". Off by default so
-      # it never runs alongside the VMs' own in-process summary (double Slack
-      # posts). Turn it on once the VMs are stopped.
+      # The summary job stays paused unless this is "true".
       SCHEDULER_JOB_ENABLED: ${{ vars.CLOUD_SCHEDULER_ENABLED || 'false' }}
       SUMMARY_CRON: ${{ vars.PERIODIC_SUMMARY_CRON || '0 * * * *' }}
       # The database (Cloud SQL ai-agent-db) has only a private IP, so the
@@ -86,12 +82,38 @@ jobs:
       VPC_NETWORK: ${{ vars.VPC_NETWORK || 'default' }}
       VPC_SUBNET: ${{ vars.VPC_SUBNET || vars.VPC_NETWORK || 'default' }}
     steps:
+      - name: Check the environment's variables
+        # Before anything is built. This step logs only whether each one is
+        # set, not its value.
+        env:
+          ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+        run: |
+          missing=""
+          for setting in \
+            "GCP_PROJECT=${{ vars.GCP_PROJECT != '' }}" \
+            "GCP_SA_KEY=${{ vars.GCP_SA_KEY != '' }}" \
+            "APP_ENV=${{ vars.APP_ENV != '' }}" \
+            "DB_NAME=${{ vars.DB_NAME != '' }}" \
+            "DASHBOARD_URL=${{ vars.DASHBOARD_URL != '' }}"; do
+            [ "${setting#*=}" = "true" ] || missing="$missing ${setting%%=*}"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Set these variables on the $ENVIRONMENT GitHub environment:$missing"
+            exit 1
+          fi
+          # APP_ENV is the environment's own name, in lower case: the app
+          # accepts nothing else, and neither do Cloud Run labels.
+          if [ "$APP_ENV" != "$ENVIRONMENT" ]; then
+            echo "::error::APP_ENV on the $ENVIRONMENT GitHub environment must be '$ENVIRONMENT'."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: google-github-actions/auth@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT }}
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ vars.GCP_PROJECT }}
+          credentials_json: ${{ vars.GCP_SA_KEY }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -112,9 +134,14 @@ jobs:
 
       - name: Write service environment
         # Plain settings. Secrets come from Secret Manager (--set-secrets below).
+        env:
+          DB_NAME: ${{ vars.DB_NAME }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
         run: |
           cat > "$RUNNER_TEMP/env.yaml" <<EOF
           APP_ENV: "${APP_ENV}"
+          DB_NAME: "${DB_NAME}"
+          DASHBOARD_URL: "${DASHBOARD_URL}"
           SCHEDULER_ENABLED: "false"
           JOBS_OIDC_AUDIENCE: "${JOBS_AUDIENCE}"
           JOBS_ALLOWED_INVOKERS: "${SCHEDULER_SA}"
@@ -212,9 +239,8 @@ jobs:
           fi
           gcloud scheduler jobs update http "$JOB" "${args[@]}" --schedule "$SUMMARY_CRON"
 
-          # Paused unless CLOUD_SCHEDULER_ENABLED=true: while the VMs still run
-          # their in-process summary, a running job would double every Slack
-          # post. No "|| true": a pause that fails must fail the deploy.
+          # Paused unless CLOUD_SCHEDULER_ENABLED=true. No "|| true": a pause
+          # that fails must fail the deploy.
           if [ "$SCHEDULER_JOB_ENABLED" = "true" ]; then
             want=ENABLED
             [ "$(job_state)" = "ENABLED" ] || gcloud scheduler jobs resume "$JOB" --location "$REGION" --quiet
@@ -228,7 +254,7 @@ jobs:
             exit 1
           fi
           if [ "$want" = "PAUSED" ]; then
-            echo "::warning::$JOB is paused. Set the repository variable CLOUD_SCHEDULER_ENABLED=true once the VMs are stopped."
+            echo "::warning::$JOB is paused. Set the repository variable CLOUD_SCHEDULER_ENABLED=true to run it."
           fi
           echo "SCHEDULER_STATE=$state" >> "$GITHUB_ENV"
 

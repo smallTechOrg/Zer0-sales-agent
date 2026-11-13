@@ -6,7 +6,7 @@ How the Zer0 sales agent is deployed, monitored and debugged.
 1. [How Deployment Works](#how-deployment-works)
 2. [One-time Setup](#one-time-setup)
 3. [Periodic Summary Job](#periodic-summary-job)
-4. [Moving Off the VMs](#moving-off-the-vms)
+4. [Load Balancer](#load-balancer)
 5. [Monitoring](#monitoring)
 6. [Rollback](#rollback)
 7. [Debugging](#debugging)
@@ -17,10 +17,16 @@ How the Zer0 sales agent is deployed, monitored and debugged.
 **Stack**: Flask app in a container on **Cloud Run**, served by gunicorn,
 talking to the shared PostgreSQL. GitHub Actions builds and deploys it.
 
-| Branch | Cloud Run service | `APP_ENV` | Database | GitHub environment |
-|---|---|---|---|---|
-| `staging` | `zero-sales-agent-staging` | `staging` | `staging_chat_db` | `deploy-staging` |
-| `main` | `zero-sales-agent` | `production` | `prod_chat_db` | `deploy-production` |
+| Branch | Cloud Run service | GitHub environment | `APP_ENV` | `DB_NAME` | `DASHBOARD_URL` |
+|---|---|---|---|---|---|
+| `staging` | `zero-sales-agent-staging` | `staging` | `staging` | `staging_chat_db` | `https://zero-staging.smalltech.in/dashboard?h=...` |
+| `main` | `zero-sales-agent` | `production` | `production` | `prod_chat_db` | `https://zer0.smalltech.in/dashboard?h=...` |
+
+`APP_ENV`, `DB_NAME` and `DASHBOARD_URL` are variables of the GitHub
+environment and have no default: the deploy stops before building if one is
+unset, and the app does not start without them. Locally they go in
+`code/.env` (`APP_ENV=local`, `DB_NAME=chatdb`). Slack messages from staging
+and local runs start with `[Staging]` / `[Local]`; production has no marker.
 
 **Flow** (`.github/workflows/deploy.yml`), on every push to `staging` or `main`:
 
@@ -52,7 +58,7 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
   | `SLACK_WEBHOOK_URL` | `SLACK_WEBHOOK_URL` |
 
   A new secret version is picked up by the next deploy (or new instance).
-- **Plain settings** (`APP_ENV`, `SCHEDULER_ENABLED=false`, the job auth
+- **Plain settings** (`APP_ENV`, `DB_NAME`, `DASHBOARD_URL`, `SCHEDULER_ENABLED=false`, the job auth
   settings, `GROQ_MODEL_NAME`, ...) are written by the *Write service
   environment* step of the workflow. Every setting and its default is
   declared in `code/config.py`; `code/.env.example` lists them.
@@ -67,14 +73,17 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
 
 | Where | Name | Notes |
 |---|---|---|
-| Secret in the `deploy-staging` environment (used by both branches) | `GCP_PROJECT` | `ai-agent-boilerplate0` |
-| Secret in the `deploy-staging` environment (used by both branches) | `GCP_SA_KEY` | JSON key of `github-deployer@` |
+| Variable in the `staging` and `production` environments | `GCP_PROJECT` | `ai-agent-boilerplate0` |
+| Variable in the `staging` and `production` environments | `GCP_SA_KEY` | JSON key of `github-deployer@` |
+| Variable in the `staging` and `production` environments | `APP_ENV` | `staging` / `production` |
+| Variable in the `staging` and `production` environments | `DB_NAME` | `staging_chat_db` / `prod_chat_db` |
+| Variable in the `staging` and `production` environments | `DASHBOARD_URL` | the dashboard the Slack summary links to |
 | Repository variable (optional) | `GCP_REGION` | default `us-central1` |
 | Repository variable (optional) | `CLOUD_RUN_MAX_INSTANCES` | default `3` |
 | Repository variable (optional) | `VPC_NETWORK`, `VPC_SUBNET` | default `default`; `none` turns VPC egress off |
 | Repository variable (optional) | `PERIODIC_SUMMARY_CRON` | default `0 * * * *` (Asia/Kolkata) |
 | Repository variable (optional) | `CLOUD_RUN_CONCURRENCY` | default `8`; keep it equal to gunicorn's `--threads` |
-| Repository variable | `CLOUD_SCHEDULER_ENABLED` | the summary job runs only when this is `true`; paused otherwise. Set it once the VMs are stopped |
+| Repository variable | `CLOUD_SCHEDULER_ENABLED` | the summary job runs only when this is `true`; paused otherwise |
 | Repository variable (optional) | `GROQ_MODEL_NAME` | default `openai/gpt-oss-120b` |
 
 ## One-time Setup
@@ -101,10 +110,10 @@ and gives the deploy account `run.admin`, `artifactregistry.writer`,
 `cloudscheduler.admin`, and *act as* on those two accounts. The script is
 safe to run again.
 
-Both branches deploy with the existing `deploy-staging` GitHub environment, as
-the VM workflow did. To gate production deploys behind an approval, create a
-`deploy-production` environment with the same two secrets and *required
-reviewers*, and select it for `main` in the workflow's `environment:` line.
+`staging` deploys with the `staging` GitHub environment and `main` with
+`production`. A variable set on an environment overrides the repository
+variable of the same name. To gate production deploys behind an approval, add
+*required reviewers* to `production`.
 
 ### Database access
 
@@ -117,9 +126,8 @@ test and no traffic moves.
 
 ## Periodic Summary Job
 
-On a VM the summary ran on an in-process APScheduler timer. Cloud Run only
-gives an instance CPU while it serves a request and can stop it at any time,
-so that timer is not reliable there. Instead:
+Cloud Run only gives an instance CPU while it serves a request and can stop
+it at any time, so an in-process timer is not reliable there. Instead:
 
 ```
 Cloud Scheduler ──(hourly, OIDC token)──▶ POST /jobs/periodic-summary ──▶ periodic_summary()
@@ -152,49 +160,16 @@ Run it now, without waiting for the hour:
 gcloud scheduler jobs run zero-sales-agent-staging-periodic-summary --location us-central1
 ```
 
-## Moving Off the VMs
+## Load Balancer
 
-The workflow no longer touches the VMs.
-
-**No DNS change.** The browser calls the API on `api.smalltech.in` /
-`api-staging.smalltech.in` (also under `/zero/`), which already point at the
-shared HTTPS load balancer `staging-lb` (url map `https-staging`). The cutover
-swaps the backend behind those routes from the VM to Cloud Run, which is
-instant and reversible. `zero.smalltech.in` / `zero-staging.smalltech.in`
-are the dashboards (GitHub Pages / Vercel) and stay as they are. The load
-balancer and the VMs also serve other apps (webscraper, hashtaglocal,
-ir-agent): **do not change DNS or stop the VMs**; only the Zer0 app on them
-goes away.
-
-1. One-time GCP setup (done) and `./scripts/lb_cutover.sh prepare`: serverless
-   NEGs and backend services for both services, no traffic yet. Leave
-   `CLOUD_SCHEDULER_ENABLED` unset: the VMs still run their own hourly
-   summary, and Cloud Scheduler must not run one as well.
-2. Merge to `staging`. Check the staging service URL (in the job summary):
-   `/health`, the chat widget, `/api/docs`.
-3. `./scripts/lb_cutover.sh switch staging`. It checks the service's
-   `/health`, swaps only the Zer0 staging backend in the url map (keeping a
-   backup of the old one), and waits for
-   `https://api-staging.smalltech.in/health`.
-4. **Merge to `main` and run `./scripts/lb_cutover.sh switch production` in
-   the same sitting.** From the merge on, `main` no longer reaches the
-   production VM: until the switch, users get the code from before the
-   merge. Merge nothing else to `main` in between.
-5. Stop the Zer0 app on both VMs, so their in-process summary stops (the
-   VMs keep running for the other apps): on each VM
-   `sudo pkill -f "flask run --host=0.0.0.0 --port=5000"`, and take
-   `update_app.sh` out of the VM's startup so a reboot does not start it again.
-6. Set the repository variable `CLOUD_SCHEDULER_ENABLED=true` and re-run the
-   deploy of both branches (Actions → *Run workflow*): this resumes both
-   jobs. Trigger one run by hand (above) and check Slack.
-7. After a week without problems, delete the VM backend services
-   (`staging-backend`, `https-backend` and their NEG / instance-group
-   entries) and the legacy scripts (`scripts/deploy.sh`,
-   `scripts/update_app.sh`, `code/get_env.py`).
-
-To go back to a VM: `./scripts/lb_cutover.sh rollback staging|production`
-(start the Zer0 app on the VM first if it was stopped), and unset
-`CLOUD_SCHEDULER_ENABLED`, then re-run the deploy, which pauses the jobs.
+The browser calls the API on `api.smalltech.in` / `api-staging.smalltech.in`
+(also under `/zero/`). The shared HTTPS load balancer `staging-lb` (url map
+`https-staging`) routes them to the Cloud Run services through the serverless
+NEGs `zero-sales-agent-neg` / `zero-sales-agent-staging-neg` and the backend
+services `zero-sales-agent-bes` / `zero-sales-agent-staging-bes`. The load
+balancer also serves other apps (webscraper, hashtaglocal, ir-agent): change
+only the Zer0 backend services. `zer0.smalltech.in` /
+`zero-staging.smalltech.in` are the dashboards (GitHub Pages / Vercel).
 
 ## Monitoring
 
@@ -259,7 +234,8 @@ gcloud run services logs read zero-sales-agent-staging --region us-central1 --li
 ```bash
 docker build -t zero .
 docker run --rm -p 8080:8080 \
-  -e APP_ENV=local -e SCHEDULER_ENABLED=false \
+  -e APP_ENV=local -e DB_NAME=chatdb -e SCHEDULER_ENABLED=false \
+  -e DASHBOARD_URL=http://localhost:3001/dashboard \
   -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/ \
   -e GROQ_API_KEY=... zero
 curl localhost:8080/health
@@ -363,19 +339,6 @@ connection each and then wait on each other. `test_db_pool.py` enforces this,
 and `db_pool` logs a warning with a stack trace if it ever happens at runtime.
 Lowering to 1 is not advised - a queued request would then sit behind any slow
 query with nothing else to run on.
-
-
-## Legacy: VM Deploy
-
-Until the VMs are deleted, `scripts/update_app.sh` and `scripts/deploy.sh`
-still run on them at boot. Nothing triggers them any more, and they read the
-branch from the instance metadata, so a VM keeps serving the last code it
-pulled. To look at one:
-
-```bash
-gcloud compute ssh <VM_INSTANCE_NAME> --zone=<ZONE>
-tail -100 /opt/ai-agent-boilerplate/code/flask.log
-```
 
 ---
 *Last Updated: Nov 2026*

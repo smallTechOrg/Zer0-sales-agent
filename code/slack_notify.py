@@ -17,7 +17,10 @@ MESSAGE_LIMIT = 30_000
 # Longest single conversation line.
 LINE_LIMIT = 3_000
 
-TITLE = "Zer0 Chat Summary"
+TITLE = "chatbot0 Summary"
+# Shown as the sender when the webhook honours it (legacy incoming webhooks do;
+# a Slack-app webhook uses the app's own display name, set in the app config).
+SENDER = "chatbot0-updates"
 # Separates distinct LLM errors in the failure sentence when a run saw more
 # than one kind.
 ERROR_SEPARATOR = "; "
@@ -74,13 +77,17 @@ def build_messages(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     size = len(header)
     for line in lines:
         if size + len(line) + 1 > MESSAGE_LIMIT and len(current) > 1:
-            messages.append({"text": "\n".join(current)})
+            messages.append(_payload(current))
             current = [header]
             size = len(header)
         current.append(line)
         size += len(line) + 1
-    messages.append({"text": "\n".join(current)})
+    messages.append(_payload(current))
     return messages
+
+
+def _payload(lines: List[str]) -> Dict[str, Any]:
+    return {"username": SENDER, "text": "\n".join(lines)}
 
 
 def post_to_slack(payload: Dict[str, Any], webhook_url: str = None) -> None:
@@ -97,7 +104,11 @@ def _header(result: Dict[str, Any]) -> str:
     if isinstance(run_at, datetime):
         title = f"{TITLE} - {format_header_time(run_at)}"
     # Slack link syntax: <url|text>. Incoming webhooks render it by default.
-    return f"<{config.DASHBOARD_URL}|{title}>"
+    link = f"<{config.DASHBOARD_URL}|{title}>"
+    # Staging and local runs post to the same channel; mark them so nobody
+    # mistakes a test conversation for a lead.
+    label = config.environment_label()
+    return f"*[{label}]* {link}" if label else link
 
 
 def format_header_time(value: datetime) -> str:

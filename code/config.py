@@ -9,8 +9,37 @@ import os
 import re
 from dotenv import load_dotenv
 from enum import Enum
-import requests
 load_dotenv()
+
+
+def _required(name: str) -> str:
+    """
+    A setting with no default: .env sets it locally, and a deploy sets it from
+    its GitHub environment. Startup stops when it is missing, instead of
+    guessing which deployment this is.
+    """
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is not set (see code/.env.example)")
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+# Which deployment this is: production, staging or local.
+APP_ENV = _required("APP_ENV").lower()
+if APP_ENV not in ("production", "staging", "local"):
+    raise RuntimeError(f"APP_ENV={APP_ENV!r} is not one of production, staging, local")
+
+
+def environment_label():
+    """
+    "Staging" or "Local" for a non-production deployment, None for production.
+    Used to mark Slack messages.
+    """
+    return None if APP_ENV == "production" else APP_ENV.capitalize()
+
 
 # ---------------------------------------------------------------------------
 # Flask
@@ -18,14 +47,8 @@ load_dotenv()
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 # Only used by `python app.py`. Cloud Run runs gunicorn on $PORT (see the
-# Dockerfile); the legacy VM runs `flask run --port=5000`.
+# Dockerfile).
 PORT = int(os.getenv("PORT", "5001"))
-
-# Which deployment this process is: "production", "staging" or "local".
-# Cloud Run sets it on the service (see .github/workflows/deploy.yml). Unset
-# means "detect": the legacy VM deploy is read from the instance metadata, and
-# anything else is a local run. It picks the database and the dashboard link.
-APP_ENV = os.getenv("APP_ENV", "").strip().lower()
 
 # Set by Werkzeug in the process that serves requests when the debug reloader
 # is on. The watcher parent does not have it. See the __main__ block in app.py.
@@ -52,10 +75,8 @@ DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "COMMON")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 # Seconds to wait for one webhook POST.
 SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
-# The Slack message header links to one of these: production on the main
-# branch, staging otherwise. Chosen in get_db_name_and_dashboard_url() below.
-DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zero.smalltech.in/dashboard?h=khuljasimsim")
-DASHBOARD_URL_STAGING = os.getenv("DASHBOARD_URL_STAGING", "https://zero-staging.smalltech.in/dashboard?h=khuljasimsim")
+# The dashboard the Slack message header links to.
+DASHBOARD_URL = _required("DASHBOARD_URL")
 # How many days back the summary job looks for sessions without a summary.
 # Only a cap on retries: a session is summarised once and then left alone, so
 # the first run after a long outage does not go through the whole history.
@@ -70,8 +91,8 @@ PERIODIC_SUMMARY_CRON = os.getenv("PERIODIC_SUMMARY_CRON", "0 * * * *")
 # Timezone the pattern is read in. Without this a server running in UTC
 # would fire at the wrong local time.
 PERIODIC_SUMMARY_TIMEZONE = os.getenv("PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
-# Run the job on the in-process scheduler. Keep it on for local runs and the
-# VM. Turn it off on Cloud Run: an instance gets CPU only while it serves a
+# Run the job on the in-process scheduler. Keep it on for local runs. Turn it
+# off on Cloud Run: an instance gets CPU only while it serves a
 # request and can be stopped at any time, so a background timer there is not
 # reliable. Cloud Scheduler calls POST /jobs/periodic-summary instead.
 SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
@@ -90,50 +111,10 @@ JOBS_ALLOWED_INVOKERS = frozenset(
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-db_name = 'chatdb'
+# The database on the server in DATABASE_URL, which must end with a slash.
+db_name = _required("DB_NAME")
 table_name = os.getenv("DB_TABLE_NAME", "chat_table")
-DATABASE_URL = os.getenv('DATABASE_URL')
-# For cloud deployment, lets create different db for production and staging
-
-_ENVIRONMENTS = {
-    "production": ("prod_chat_db", DASHBOARD_URL),
-    "staging": ("staging_chat_db", DASHBOARD_URL_STAGING),
-}
-
-
-def get_db_name_and_dashboard_url():
-    # Cloud Run: the deploy says which environment this is.
-    if APP_ENV in _ENVIRONMENTS:
-        print(f"APP_ENV={APP_ENV}")
-        return _ENVIRONMENTS[APP_ENV]
-    if APP_ENV == "local":
-        return db_name, DASHBOARD_URL_STAGING
-    if APP_ENV:
-        raise ValueError(
-            f"APP_ENV={APP_ENV!r} is not one of production, staging, local"
-        )
-
-    # Legacy VM deploy: the branch is in the instance metadata.
-    METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/BRANCH_NAME"
-    headers = {"Metadata-Flavor": "Google"}
-    try:
-        response = requests.get(METADATA_URL, headers=headers, timeout=2)
-        if response.status_code == 200:
-            branch_name  = response.text.strip()
-            print(f"Detected branch: {branch_name}")
-            if branch_name == 'main':
-                return _ENVIRONMENTS["production"]
-            else:
-                return _ENVIRONMENTS["staging"]
-    except Exception as e:
-        print(f"Could not fetch metadata (defaulting to local DB): {e}")
-
-    # Fallback if metadata not found or error occurs. Local runs link to the
-    # staging dashboard, never to production.
-    return db_name, DASHBOARD_URL_STAGING
-
-db_name, DASHBOARD_URL = get_db_name_and_dashboard_url()
-DATABASE_URL = DATABASE_URL + db_name
+DATABASE_URL = _required("DATABASE_URL") + db_name
 
 def _redact_password(url: str) -> str:
     """The URL with its password replaced, for logs."""
