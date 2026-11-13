@@ -4,6 +4,7 @@ from flask_smorest import Api
 
 from api import register_blueprints
 from api.domains import domains_bp
+from chatbot0 import chatbot0_bp, register_host_routing
 from config import DEBUG, PORT, SCHEDULER_ENABLED, WERKZEUG_RUN_MAIN
 from db import init_db
 from scheduler import start_scheduler, stop_scheduler
@@ -37,6 +38,12 @@ def create_app() -> Flask:
 
     # -- Existing blueprints (health, chat, prompts, legacy swagger UI) --------
     register_blueprints(flask_app)
+
+    # -- chatbot0 public pages (SMA-8), server-rendered under /chatbot0/ ------
+    # "/" stays the legacy Swagger UI; see chatbot0/__init__.py for the routing.
+    flask_app.register_blueprint(chatbot0_bp)
+    # ... and at the root of chatbot0.smalltech.in (host-based; other hosts unchanged).
+    register_host_routing(flask_app)
 
     # -- Smorest-managed blueprints (auto-documented) --------------------------
     smorest_api = Api(flask_app)

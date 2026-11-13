@@ -1,6 +1,8 @@
-# AI Agent Boilerplate
+# chatbot0
 
-This project is a simple AI agent powered by Groq cloud (via LangChain), delivered through a Flask backend. 
+chatbot0 is the AI chat agent for small-business websites, part of [Zer0](https://zer0.smalltech.in) by smallTech. This repository (formerly `Zer0-sales-agent`) is its backend: the chat API behind the embeddable widget, the lead and prompt storage, and the public pages at [chatbot0.smalltech.in](https://chatbot0.smalltech.in). It is a Flask app that calls the LLM through LangChain.
+
+Prompts are stored per domain in the `prompts` table (`base-prompt`, `company`, `intro-message`); a visitor's site is matched to a domain key through the `domains` table. The Cloud Run service, image repository and runtime service account keep their original `zero-sales-agent` names (see `DEPLOYMENT.md`).
 
 ## Tech Stack
 
@@ -140,6 +142,25 @@ python app.py
 ```
 Now visit http://127.0.0.1:5000/ in your browser.
 For newer APIs visit http://127.0.0.1:5001/api/docs.
+
+## chatbot0 public pages
+
+The marketing pages for **chatbot0** (the chat agent this backend powers) are
+rendered server-side by the `chatbot0` blueprint (`code/chatbot0/`), under the
+`/chatbot0/` prefix, because `/` is the legacy Swagger UI:
+
+| Path | Page |
+|---|---|
+| `/chatbot0/` | Landing page |
+| `/chatbot0/pricing` | Pricing (plans live in `code/chatbot0/content.py`) |
+| `/chatbot0/robots.txt`, `/chatbot0/sitemap.xml` | SEO files for chatbot0.smalltech.in |
+| `/chatbot0/static/...` | CSS, favicons, logo (`code/static/chatbot0/`) |
+
+Templates are in `code/templates/chatbot0/`. Links in them are relative, so the
+same pages work at the root of chatbot0.smalltech.in once that host is mapped
+onto `/chatbot0/`. Canonical and Open Graph URLs always use
+https://chatbot0.smalltech.in. The pages take no input and never touch the
+database or the LLM.
 
 ## Test Flask APIs 
 
