@@ -7,8 +7,6 @@
 **/.envrc
 **/venv
 **/*test_report.html
-code/flask.log
-code/zero.pid
 scripts
 *.md
 code/test

@@ -11,13 +11,43 @@ from dotenv import load_dotenv
 from enum import Enum
 load_dotenv()
 
+
+def _required(name: str) -> str:
+    """
+    A setting with no default: .env sets it locally, and a deploy sets it from
+    its GitHub environment. Startup stops when it is missing, instead of
+    guessing which deployment this is.
+    """
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is not set (see code/.env.example)")
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+# Which deployment this is: production, staging or local.
+APP_ENV = _required("APP_ENV").lower()
+if APP_ENV not in ("production", "staging", "local"):
+    raise RuntimeError(f"APP_ENV={APP_ENV!r} is not one of production, staging, local")
+
+
+def environment_label():
+    """
+    "Staging" or "Local" for a non-production deployment, None for production.
+    Used to mark Slack messages.
+    """
+    return None if APP_ENV == "production" else APP_ENV.capitalize()
+
+
 # ---------------------------------------------------------------------------
 # Flask
 # ---------------------------------------------------------------------------
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 # Only used by `python app.py`. Cloud Run runs gunicorn on $PORT (see the
-# Dockerfile); the legacy VM runs `flask run --port=5000`.
+# Dockerfile).
 PORT = int(os.getenv("PORT", "5001"))
 
 # Set by Werkzeug in the process that serves requests when the debug reloader
@@ -45,10 +75,8 @@ DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "COMMON")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 # Seconds to wait for one webhook POST.
 SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
-# The dashboard the Slack message header links to. Each deploy sets its own
-# from its GitHub environment (see .github/workflows/deploy.yml). The default
-# is zero-frontend-web run locally on port 3001, next to a host site on 3000.
-DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://localhost:3001/dashboard")
+# The dashboard the Slack message header links to.
+DASHBOARD_URL = _required("DASHBOARD_URL")
 # How many days back the summary job looks for sessions without a summary.
 # Only a cap on retries: a session is summarised once and then left alone, so
 # the first run after a long outage does not go through the whole history.
@@ -63,8 +91,8 @@ PERIODIC_SUMMARY_CRON = os.getenv("PERIODIC_SUMMARY_CRON", "0 * * * *")
 # Timezone the pattern is read in. Without this a server running in UTC
 # would fire at the wrong local time.
 PERIODIC_SUMMARY_TIMEZONE = os.getenv("PERIODIC_SUMMARY_TIMEZONE", "Asia/Kolkata")
-# Run the job on the in-process scheduler. Keep it on for local runs and the
-# VM. Turn it off on Cloud Run: an instance gets CPU only while it serves a
+# Run the job on the in-process scheduler. Keep it on for local runs. Turn it
+# off on Cloud Run: an instance gets CPU only while it serves a
 # request and can be stopped at any time, so a background timer there is not
 # reliable. Cloud Scheduler calls POST /jobs/periodic-summary instead.
 SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
@@ -83,11 +111,10 @@ JOBS_ALLOWED_INVOKERS = frozenset(
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-# Each deploy sets its own database from its GitHub environment:
-# prod_chat_db on main, staging_chat_db on staging. Local runs use chatdb.
-db_name = os.getenv("DB_NAME", "chatdb")
+# The database on the server in DATABASE_URL, which must end with a slash.
+db_name = _required("DB_NAME")
 table_name = os.getenv("DB_TABLE_NAME", "chat_table")
-DATABASE_URL = os.getenv('DATABASE_URL') + db_name
+DATABASE_URL = _required("DATABASE_URL") + db_name
 
 def _redact_password(url: str) -> str:
     """The URL with its password replaced, for logs."""

@@ -82,9 +82,6 @@ done
 
 cat <<EOF
 
-Done. Next:
-  1. ./scripts/lb_cutover.sh prepare  (load balancer backends, no traffic)
-  2. Merge to staging, then ./scripts/lb_cutover.sh switch staging.
-  3. CLOUD_SCHEDULER_ENABLED=true only once the Zer0 app on the VMs is
-     stopped (until then the summary job stays paused; see DEPLOYMENT.md).
+Done. Next: set the GitHub variables listed in DEPLOYMENT.md and push to
+staging.
 EOF

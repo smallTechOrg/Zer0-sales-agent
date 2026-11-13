@@ -45,8 +45,7 @@ def create_app() -> Flask:
     CORS(flask_app)
 
     # -- Background jobs -------------------------------------------------------
-    # Locally and on the VM the periodic summary runs in a thread of this
-    # process. On Cloud Run SCHEDULER_ENABLED is false and Cloud Scheduler
+    # Locally the periodic summary runs in a thread of this process. On Cloud Run SCHEDULER_ENABLED is false and Cloud Scheduler
     # calls POST /jobs/periodic-summary instead (see api/jobs.py).
     if SCHEDULER_ENABLED:
         start_scheduler()

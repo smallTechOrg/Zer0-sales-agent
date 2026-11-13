@@ -10,13 +10,11 @@ langchain-postgres==0.0.16
 psycopg[binary,pool]==3.2.12
 langchain-core==1.0.3
 flask_swagger_ui==5.21.0
-google-cloud-secret-manager==2.25.0
 requests==2.32.5
 pytest==8.4.2
 pytest-html==4.1.1
 ruff==0.14.14
 apscheduler==3.11.0
 gunicorn==23.0.0
-# Verifies the Cloud Scheduler OIDC token in api/jobs.py. Pinned on purpose:
-# it used to arrive only through google-cloud-secret-manager.
+# Verifies the Cloud Scheduler OIDC token in api/jobs.py.
 google-auth==2.62.1
