@@ -141,7 +141,7 @@ def _close_pool_at_exit() -> None:
 
 def _handle_sigterm(signum, frame):
     """
-    Close the pool when deploy.sh stops the app. Python does not run atexit
+    Close the pool when the app is stopped. Python does not run atexit
     handlers on SIGTERM. SIGINT needs no handler.
     """
     _close_pool_at_exit()

@@ -16,7 +16,9 @@ import slack_notify  # noqa: E402
 IST = ZoneInfo("Asia/Kolkata")
 RUN_AT = datetime(2026, 10, 7, 17, 0, tzinfo=IST)
 DASHBOARD = "https://zer0.smalltech.in/dashboard?h=test-secret"
-HEADER = f"<{DASHBOARD}|chatbot0 Chat Summary - 7th Oct 2026 - 5 pm IST>"
+HEADER = f"<{DASHBOARD}|chatbot0 Summary - 7th Oct 2026 - 5 pm IST>"
+# The real function, before fixed_config replaces it.
+ENVIRONMENT_LABEL = slack_notify.config.environment_label
 
 
 @pytest.fixture(autouse=True)
@@ -121,7 +123,7 @@ class TestBuildMessages:
     def test_header_without_run_time(self):
         result = _result([_session(1)], run_at=None)
         [message] = slack_notify.build_messages(result)
-        assert message["text"].startswith(f"<{DASHBOARD}|chatbot0 Chat Summary>\n")
+        assert message["text"].startswith(f"<{DASHBOARD}|chatbot0 Summary>\n")
 
     def test_missing_name_is_unknown(self):
         blank = _session(1, name="   ")
@@ -184,7 +186,7 @@ class TestBuildMessages:
         assert message == {
             "username": "chatbot0-updates",
             "text": (
-                f"<{DASHBOARD}|chatbot0 Chat Summary - 7th Oct 2026 - 6 pm IST>\n"
+                f"<{DASHBOARD}|chatbot0 Summary - 7th Oct 2026 - 6 pm IST>\n"
                 "Failed to generate a summary. LLM calls failed with error: RESOURCE_EXHAUSTED."
             )
         }
@@ -309,22 +311,27 @@ class TestSend:
 class TestEnvironmentMarker:
     """Staging and local runs are marked in the header; production is not."""
 
-    def test_production_has_no_marker(self):
-        [message] = slack_notify.build_messages(_result([_session(1)]))
-        assert message["text"].startswith(f"<{DASHBOARD}|chatbot0 Chat Summary")
+    @pytest.fixture(autouse=True)
+    def real_label(self, monkeypatch):
+        # fixed_config stubs the label out; these tests use the real one.
+        monkeypatch.setattr(slack_notify.config, "environment_label", ENVIRONMENT_LABEL)
 
-    @pytest.mark.parametrize("label", ["Staging", "Local"])
-    def test_non_production_is_marked_before_the_link(self, monkeypatch, label):
-        monkeypatch.setattr(slack_notify.config, "environment_label", lambda: label)
+    def test_production_has_no_marker(self, monkeypatch):
+        monkeypatch.setattr(slack_notify.config, "APP_ENV", "production")
         [message] = slack_notify.build_messages(_result([_session(1)]))
-        assert message["text"].startswith(f"*[{label}]* <{DASHBOARD}|chatbot0 Chat Summary - 7th Oct 2026 - 5 pm IST>\n")
+        assert message["text"].startswith(f"<{DASHBOARD}|chatbot0 Summary - 7th Oct 2026 - 5 pm IST>\n")
+
+    @pytest.mark.parametrize("app_env, label", [("staging", "Staging"), ("local", "Local")])
+    def test_non_production_is_marked_before_the_link(self, monkeypatch, app_env, label):
+        monkeypatch.setattr(slack_notify.config, "APP_ENV", app_env)
+        [message] = slack_notify.build_messages(_result([_session(1)]))
+        assert message["text"].startswith(f"*[{label}]* <{DASHBOARD}|chatbot0 Summary - 7th Oct 2026 - 5 pm IST>\n")
 
     def test_every_part_of_a_split_run_carries_the_marker(self, monkeypatch):
-        monkeypatch.setattr(slack_notify.config, "environment_label", lambda: "Staging")
+        monkeypatch.setattr(slack_notify.config, "APP_ENV", "staging")
         monkeypatch.setattr(slack_notify, "MESSAGE_LIMIT", 200)
         sessions = [_session(i, summary=f"Summary {i}. " + "x" * 80) for i in range(1, 5)]
         messages = slack_notify.build_messages(_result(sessions))
         assert len(messages) > 1
         assert all(m["text"].startswith("*[Staging]* <") for m in messages)
         assert all(m["username"] == "chatbot0-updates" for m in messages)
-

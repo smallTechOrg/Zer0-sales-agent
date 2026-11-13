@@ -17,7 +17,7 @@ MESSAGE_LIMIT = 30_000
 # Longest single conversation line.
 LINE_LIMIT = 3_000
 
-TITLE = "chatbot0 Chat Summary"
+TITLE = "chatbot0 Summary"
 # Shown as the sender when the webhook honours it (legacy incoming webhooks do;
 # a Slack-app webhook uses the app's own display name, set in the app config).
 SENDER = "chatbot0-updates"
