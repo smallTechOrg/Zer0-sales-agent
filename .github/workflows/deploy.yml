@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT }}
   REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   AR_REPOSITORY: zero-sales-agent
   IMAGE_NAME: zero-sales-agent
@@ -41,7 +41,6 @@ jobs:
       run:
         working-directory: code
     env:
-      APP_ENV: local
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/
       GROQ_API_KEY: dummy-key-for-tests
     steps:
@@ -57,13 +56,12 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-24.04   # ubuntu-latest (26.04) has no Python 3.12.10 build
-    # The deploy-staging GitHub environment holds GCP_PROJECT and GCP_SA_KEY
-    # (the github-deployer service account) and serves both branches, as the
-    # VM workflow did. To gate production deploys, create deploy-production
-    # with the same secrets and required reviewers, and select it for main.
-    environment: deploy-staging
+    # main deploys with the production GitHub environment, staging with
+    # staging. Each holds the variables GCP_PROJECT, GCP_SA_KEY (the
+    # github-deployer service account), DB_NAME and DASHBOARD_URL.
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     env:
-      APP_ENV: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      DEPLOY_ENV: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
       SERVICE: ${{ github.ref_name == 'main' && 'zero-sales-agent' || 'zero-sales-agent-staging' }}
       # Production keeps one warm instance so the chat widget never waits for
       # a cold start. Staging scales to zero.
@@ -90,8 +88,8 @@ jobs:
 
       - uses: google-github-actions/auth@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT }}
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ vars.GCP_PROJECT }}
+          credentials_json: ${{ vars.GCP_SA_KEY }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -112,9 +110,20 @@ jobs:
 
       - name: Write service environment
         # Plain settings. Secrets come from Secret Manager (--set-secrets below).
+        env:
+          DB_NAME: ${{ vars.DB_NAME }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
         run: |
+          # Without these the service would use the local database and link.
+          for name in DB_NAME DASHBOARD_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Set the variable $name on the GitHub environment of this branch (production for main, staging for staging)."
+              exit 1
+            fi
+          done
           cat > "$RUNNER_TEMP/env.yaml" <<EOF
-          APP_ENV: "${APP_ENV}"
+          DB_NAME: "${DB_NAME}"
+          DASHBOARD_URL: "${DASHBOARD_URL}"
           SCHEDULER_ENABLED: "false"
           JOBS_OIDC_AUDIENCE: "${JOBS_AUDIENCE}"
           JOBS_ALLOWED_INVOKERS: "${SCHEDULER_SA}"
@@ -142,7 +151,7 @@ jobs:
             --max-instances "$MAX_INSTANCES"
             --env-vars-file "$RUNNER_TEMP/env.yaml"
             --set-secrets "GROQ_API_KEY=GROQ_API_KEY:latest,DATABASE_URL=POSTGRES_URL:latest,SLACK_WEBHOOK_URL=SLACK_WEBHOOK_URL:latest"
-            --labels "app=zero-sales-agent,env=${APP_ENV},commit=${GITHUB_SHA::12}"
+            --labels "app=zero-sales-agent,env=${DEPLOY_ENV},commit=${GITHUB_SHA::12}"
             --quiet
           )
           # Reach the database's private IP through Direct VPC egress. Only
@@ -239,6 +248,6 @@ jobs:
             echo "### Deployed ${SERVICE}"
             echo "- URL: ${URL}"
             echo "- Image: \`${IMAGE}\`"
-            echo "- Environment: ${APP_ENV}"
+            echo "- Environment: ${DEPLOY_ENV}"
             echo "- Summary job: ${SCHEDULER_STATE:-unknown}"
           } >> "$GITHUB_STEP_SUMMARY"

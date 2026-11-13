@@ -1,6 +1,5 @@
 """
-Tests for how config picks the database and dashboard: APP_ENV on Cloud Run,
-the instance metadata on the legacy VM, and a local fallback.
+Tests for the helpers in config.
 """
 import os
 import sys
@@ -10,58 +9,6 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config  # noqa: E402
-
-
-@pytest.fixture
-def no_metadata(monkeypatch):
-    """Fail the test if the VM metadata server is consulted."""
-    def boom(*a, **k):
-        raise AssertionError("metadata server must not be called")
-
-    monkeypatch.setattr(config.requests, "get", boom)
-
-
-@pytest.mark.parametrize(
-    "app_env, expected_db, expected_url",
-    [
-        ("production", "prod_chat_db", "https://zero.smalltech.in/dashboard?h=khuljasimsim"),
-        ("staging", "staging_chat_db", config.DASHBOARD_URL_STAGING),
-        ("local", "chatdb", config.DASHBOARD_URL_LOCAL),
-    ],
-)
-def test_app_env_picks_environment(monkeypatch, no_metadata, app_env, expected_db, expected_url):
-    monkeypatch.setattr(config, "APP_ENV", app_env)
-    monkeypatch.setattr(config, "db_name", "chatdb")
-    assert config.get_db_name_and_dashboard_url() == (expected_db, expected_url)
-
-
-def test_unknown_app_env_is_an_error(monkeypatch, no_metadata):
-    monkeypatch.setattr(config, "APP_ENV", "prod")
-    with pytest.raises(ValueError):
-        config.get_db_name_and_dashboard_url()
-
-
-class _Resp:
-    def __init__(self, status, text=""):
-        self.status_code, self.text = status, text
-
-
-@pytest.mark.parametrize(
-    "branch, expected_db",
-    [("main", "prod_chat_db"), ("staging", "staging_chat_db")],
-)
-def test_vm_metadata_still_used_without_app_env(monkeypatch, branch, expected_db):
-    monkeypatch.setattr(config, "APP_ENV", "")
-    monkeypatch.setattr(config.requests, "get", lambda *a, **k: _Resp(200, branch))
-    assert config.get_db_name_and_dashboard_url()[0] == expected_db
-
-
-def test_cloud_run_without_app_env_falls_back_to_local(monkeypatch):
-    """Cloud Run's metadata server has no BRANCH_NAME attribute (404)."""
-    monkeypatch.setattr(config, "APP_ENV", "")
-    monkeypatch.setattr(config, "db_name", "chatdb")
-    monkeypatch.setattr(config.requests, "get", lambda *a, **k: _Resp(404))
-    assert config.get_db_name_and_dashboard_url() == ("chatdb", config.DASHBOARD_URL_LOCAL)
 
 
 @pytest.mark.parametrize(

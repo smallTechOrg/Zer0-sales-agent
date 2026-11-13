@@ -9,7 +9,6 @@ import os
 import re
 from dotenv import load_dotenv
 from enum import Enum
-import requests
 load_dotenv()
 
 # ---------------------------------------------------------------------------
@@ -20,12 +19,6 @@ DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 # Only used by `python app.py`. Cloud Run runs gunicorn on $PORT (see the
 # Dockerfile); the legacy VM runs `flask run --port=5000`.
 PORT = int(os.getenv("PORT", "5001"))
-
-# Which deployment this process is: "production", "staging" or "local".
-# Cloud Run sets it on the service (see .github/workflows/deploy.yml). Unset
-# means "detect": the legacy VM deploy is read from the instance metadata, and
-# anything else is a local run. It picks the database and the dashboard link.
-APP_ENV = os.getenv("APP_ENV", "").strip().lower()
 
 # Set by Werkzeug in the process that serves requests when the debug reloader
 # is on. The watcher parent does not have it. See the __main__ block in app.py.
@@ -52,13 +45,10 @@ DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "COMMON")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 # Seconds to wait for one webhook POST.
 SLACK_TIMEOUT = float(os.getenv("SLACK_TIMEOUT", "10"))
-# The Slack message header links to one of these: production on the main
-# branch, staging on other branches, local when not running in the cloud.
-# Chosen in get_db_name_and_dashboard_url() below.
-DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://zero.smalltech.in/dashboard?h=khuljasimsim")
-DASHBOARD_URL_STAGING = os.getenv("DASHBOARD_URL_STAGING", "https://zero-staging.smalltech.in/dashboard?h=khuljasimsim")
-# zero-frontend-web run locally on port 3001, next to a host site on 3000.
-DASHBOARD_URL_LOCAL = os.getenv("DASHBOARD_URL_LOCAL", "http://localhost:3001/dashboard?h=khuljasimsim")
+# The dashboard the Slack message header links to. Each deploy sets its own
+# from its GitHub environment (see .github/workflows/deploy.yml). The default
+# is zero-frontend-web run locally on port 3001, next to a host site on 3000.
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://localhost:3001/dashboard")
 # How many days back the summary job looks for sessions without a summary.
 # Only a cap on retries: a session is summarised once and then left alone, so
 # the first run after a long outage does not go through the whole history.
@@ -93,50 +83,11 @@ JOBS_ALLOWED_INVOKERS = frozenset(
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-db_name = 'chatdb'
+# Each deploy sets its own database from its GitHub environment:
+# prod_chat_db on main, staging_chat_db on staging. Local runs use chatdb.
+db_name = os.getenv("DB_NAME", "chatdb")
 table_name = os.getenv("DB_TABLE_NAME", "chat_table")
-DATABASE_URL = os.getenv('DATABASE_URL')
-# For cloud deployment, lets create different db for production and staging
-
-_ENVIRONMENTS = {
-    "production": ("prod_chat_db", DASHBOARD_URL),
-    "staging": ("staging_chat_db", DASHBOARD_URL_STAGING),
-}
-
-
-def get_db_name_and_dashboard_url():
-    # Cloud Run: the deploy says which environment this is.
-    if APP_ENV in _ENVIRONMENTS:
-        print(f"APP_ENV={APP_ENV}")
-        return _ENVIRONMENTS[APP_ENV]
-    if APP_ENV == "local":
-        return db_name, DASHBOARD_URL_LOCAL
-    if APP_ENV:
-        raise ValueError(
-            f"APP_ENV={APP_ENV!r} is not one of production, staging, local"
-        )
-
-    # Legacy VM deploy: the branch is in the instance metadata.
-    METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/BRANCH_NAME"
-    headers = {"Metadata-Flavor": "Google"}
-    try:
-        response = requests.get(METADATA_URL, headers=headers, timeout=2)
-        if response.status_code == 200:
-            branch_name  = response.text.strip()
-            print(f"Detected branch: {branch_name}")
-            if branch_name == 'main':
-                return _ENVIRONMENTS["production"]
-            else:
-                return _ENVIRONMENTS["staging"]
-    except Exception as e:
-        print(f"Could not fetch metadata (defaulting to local DB): {e}")
-
-    # Fallback if metadata not found or error occurs. Local runs link to the
-    # local dashboard, never to staging or production.
-    return db_name, DASHBOARD_URL_LOCAL
-
-db_name, DASHBOARD_URL = get_db_name_and_dashboard_url()
-DATABASE_URL = DATABASE_URL + db_name
+DATABASE_URL = os.getenv('DATABASE_URL') + db_name
 
 def _redact_password(url: str) -> str:
     """The URL with its password replaced, for logs."""

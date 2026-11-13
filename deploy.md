@@ -13,8 +13,8 @@ The periodic Slack summary runs from **Cloud Scheduler**, which calls
 
 1. As a GCP project Owner, run `scripts/gcp_setup.sh` (APIs, image repository,
    service accounts, permissions).
-2. In GitHub → Settings → Environments, make sure `deploy-staging` and
-   `deploy-production` both have the secrets `GCP_PROJECT` and `GCP_SA_KEY`.
+2. In GitHub → Settings → Environments, give both `staging` and `production`
+   the variables `GCP_PROJECT`, `GCP_SA_KEY`, `DB_NAME` and `DASHBOARD_URL`.
 3. Make sure the database accepts connections from Cloud Run.
 4. Push to `staging`.
 

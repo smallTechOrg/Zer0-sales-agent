@@ -17,10 +17,14 @@ How the Zer0 sales agent is deployed, monitored and debugged.
 **Stack**: Flask app in a container on **Cloud Run**, served by gunicorn,
 talking to the shared PostgreSQL. GitHub Actions builds and deploys it.
 
-| Branch | Cloud Run service | `APP_ENV` | Database | GitHub environment |
+| Branch | Cloud Run service | GitHub environment | `DB_NAME` | `DASHBOARD_URL` |
 |---|---|---|---|---|
-| `staging` | `zero-sales-agent-staging` | `staging` | `staging_chat_db` | `deploy-staging` |
-| `main` | `zero-sales-agent` | `production` | `prod_chat_db` | `deploy-production` |
+| `staging` | `zero-sales-agent-staging` | `staging` | `staging_chat_db` | `https://zero-staging.smalltech.in/dashboard?h=...` |
+| `main` | `zero-sales-agent` | `production` | `prod_chat_db` | `https://zer0.smalltech.in/dashboard?h=...` |
+
+`DB_NAME` and `DASHBOARD_URL` are variables of the GitHub environment. The
+deploy fails if either is unset. Without them the app uses the local
+database (`chatdb`) and the local dashboard link.
 
 **Flow** (`.github/workflows/deploy.yml`), on every push to `staging` or `main`:
 
@@ -52,7 +56,7 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
   | `SLACK_WEBHOOK_URL` | `SLACK_WEBHOOK_URL` |
 
   A new secret version is picked up by the next deploy (or new instance).
-- **Plain settings** (`APP_ENV`, `SCHEDULER_ENABLED=false`, the job auth
+- **Plain settings** (`DB_NAME`, `DASHBOARD_URL`, `SCHEDULER_ENABLED=false`, the job auth
   settings, `GROQ_MODEL_NAME`, ...) are written by the *Write service
   environment* step of the workflow. Every setting and its default is
   declared in `code/config.py`; `code/.env.example` lists them.
@@ -67,8 +71,10 @@ You can re-run a deploy by hand: Actions → *Deploy to Cloud Run* → *Run work
 
 | Where | Name | Notes |
 |---|---|---|
-| Secret in the `deploy-staging` environment (used by both branches) | `GCP_PROJECT` | `ai-agent-boilerplate0` |
-| Secret in the `deploy-staging` environment (used by both branches) | `GCP_SA_KEY` | JSON key of `github-deployer@` |
+| Variable in the `staging` and `production` environments | `GCP_PROJECT` | `ai-agent-boilerplate0` |
+| Variable in the `staging` and `production` environments | `GCP_SA_KEY` | JSON key of `github-deployer@` |
+| Variable in the `staging` and `production` environments | `DB_NAME` | `staging_chat_db` / `prod_chat_db` |
+| Variable in the `staging` and `production` environments | `DASHBOARD_URL` | the dashboard the Slack summary links to |
 | Repository variable (optional) | `GCP_REGION` | default `us-central1` |
 | Repository variable (optional) | `CLOUD_RUN_MAX_INSTANCES` | default `3` |
 | Repository variable (optional) | `VPC_NETWORK`, `VPC_SUBNET` | default `default`; `none` turns VPC egress off |
@@ -101,10 +107,10 @@ and gives the deploy account `run.admin`, `artifactregistry.writer`,
 `cloudscheduler.admin`, and *act as* on those two accounts. The script is
 safe to run again.
 
-Both branches deploy with the existing `deploy-staging` GitHub environment, as
-the VM workflow did. To gate production deploys behind an approval, create a
-`deploy-production` environment with the same two secrets and *required
-reviewers*, and select it for `main` in the workflow's `environment:` line.
+`staging` deploys with the `staging` GitHub environment and `main` with
+`production`. A variable set on an environment overrides the repository
+variable of the same name. To gate production deploys behind an approval, add
+*required reviewers* to `production`.
 
 ### Database access
 
@@ -160,7 +166,7 @@ The workflow no longer touches the VMs.
 `api-staging.smalltech.in` (also under `/zero/`), which already point at the
 shared HTTPS load balancer `staging-lb` (url map `https-staging`). The cutover
 swaps the backend behind those routes from the VM to Cloud Run, which is
-instant and reversible. `zero.smalltech.in` / `zero-staging.smalltech.in`
+instant and reversible. `zer0.smalltech.in` / `zero-staging.smalltech.in`
 are the dashboards (GitHub Pages / Vercel) and stay as they are. The load
 balancer and the VMs also serve other apps (webscraper, hashtaglocal,
 ir-agent): **do not change DNS or stop the VMs**; only the Zer0 app on them
@@ -193,7 +199,8 @@ goes away.
    `scripts/update_app.sh`, `code/get_env.py`).
 
 To go back to a VM: `./scripts/lb_cutover.sh rollback staging|production`
-(start the Zer0 app on the VM first if it was stopped), and unset
+(start the Zer0 app on the VM first if it was stopped, with `DB_NAME` and
+`DASHBOARD_URL` in its `.env` - see *Legacy: VM Deploy*), and unset
 `CLOUD_SCHEDULER_ENABLED`, then re-run the deploy, which pauses the jobs.
 
 ## Monitoring
@@ -259,7 +266,7 @@ gcloud run services logs read zero-sales-agent-staging --region us-central1 --li
 ```bash
 docker build -t zero .
 docker run --rm -p 8080:8080 \
-  -e APP_ENV=local -e SCHEDULER_ENABLED=false \
+  -e SCHEDULER_ENABLED=false \
   -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/ \
   -e GROQ_API_KEY=... zero
 curl localhost:8080/health
@@ -370,7 +377,9 @@ query with nothing else to run on.
 Until the VMs are deleted, `scripts/update_app.sh` and `scripts/deploy.sh`
 still run on them at boot. Nothing triggers them any more, and they read the
 branch from the instance metadata, so a VM keeps serving the last code it
-pulled. To look at one:
+pulled. The app itself no longer reads the metadata: a VM that pulls current
+code uses `chatdb` and the local dashboard link unless its `.env` sets
+`DB_NAME` and `DASHBOARD_URL`. To look at one:
 
 ```bash
 gcloud compute ssh <VM_INSTANCE_NAME> --zone=<ZONE>
